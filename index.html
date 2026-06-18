@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feed Inspector — supplier file normalizer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    /* surface: kraft / manifest document, grounded in the shipping-feed subject */
+    --paper:#efe9dd;
+    --paper-2:#e6dfd0;
+    --card:#fbf8f1;
+    --ink:#23201a;
+    --ink-soft:#6f6757;
+    --line:#cabfa8;
+    --line-strong:#b3a585;
+    /* brand accent: stamp ink blue, used only for primary actions + wordmark */
+    --accent:#1f3a5f;
+    --accent-ink:#fbf8f1;
+    /* status palette — reserved strictly for validation flags, never decoration */
+    --block:#9c2b1e;     /* hard / critical */
+    --block-bg:#f4ddd8;
+    --confirm:#9a6310;   /* estimate, needs confirmation */
+    --confirm-bg:#f6e9cf;
+    --ok:#436b32;
+    --ok-bg:#e2ecd4;
+    --mono:"SFMono-Regular",ui-monospace,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      repeating-linear-gradient(0deg,transparent 0 39px,rgba(120,105,75,.05) 39px 40px),
+      var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:15px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
+
+  /* masthead styled like the top of a goods manifest */
+  header.mast{
+    border:2px solid var(--ink);
+    background:var(--card);
+    padding:18px 22px;
+    display:flex;flex-wrap:wrap;align-items:baseline;gap:14px 26px;
+    position:relative;
+  }
+  header.mast:before{
+    content:"FORM / FEED-01";
+    position:absolute;top:-2px;right:18px;transform:translateY(-50%);
+    background:var(--paper);padding:0 8px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--ink-soft);
+  }
+  .word{font-family:var(--mono);font-weight:700;font-size:22px;letter-spacing:.02em}
+  .word b{color:var(--accent)}
+  .tag{font-size:13px;color:var(--ink-soft);max-width:560px}
+  .stamp{
+    margin-left:auto;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    border:1.5px solid var(--line-strong);color:var(--ink-soft);
+    padding:6px 10px;border-radius:3px;transform:rotate(-3deg);white-space:nowrap;
+  }
+
+  /* numbered steps — real sequence, so numbering earns its place */
+  .step{margin-top:26px;border:1px solid var(--line);background:var(--card)}
+  .step-h{
+    display:flex;align-items:center;gap:12px;
+    padding:11px 16px;border-bottom:1px solid var(--line);
+    background:var(--paper-2);
+  }
+  .num{
+    font-family:var(--mono);font-weight:700;font-size:13px;
+    width:26px;height:26px;flex:0 0 26px;border-radius:50%;
+    background:var(--ink);color:var(--card);
+    display:grid;place-items:center;
+  }
+  .step-h h2{margin:0;font-size:15px;font-weight:600;letter-spacing:.01em}
+  .step-h .sub{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+  .step-b{padding:18px 16px}
+  .step[hidden]{display:none}
+
+  /* drop zone */
+  .drop{
+    border:2px dashed var(--line-strong);border-radius:4px;
+    padding:34px 20px;text-align:center;cursor:pointer;
+    transition:background .12s,border-color .12s;
+    background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(120,105,75,.03) 10px 20px);
+  }
+  .drop:hover,.drop.over{background:var(--paper-2);border-color:var(--accent)}
+  .drop .big{font-family:var(--mono);font-size:15px}
+  .drop .small{font-size:12.5px;color:var(--ink-soft);margin-top:6px}
+  .formats{font-family:var(--mono);font-size:12px;color:var(--ink-soft);margin-top:10px;letter-spacing:.06em}
+
+  .row-inline{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
+  input[type=text]{
+    font-family:var(--mono);font-size:13px;padding:8px 10px;
+    border:1px solid var(--line-strong);background:var(--card);color:var(--ink);
+    border-radius:3px;min-width:240px;flex:1;
+  }
+  input[type=text]:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  button{
+    font-family:var(--mono);font-size:13px;letter-spacing:.04em;
+    padding:9px 16px;border:1px solid var(--ink);background:var(--accent);color:var(--accent-ink);
+    border-radius:3px;cursor:pointer;
+  }
+  button.ghost{background:transparent;color:var(--ink)}
+  button.ghost:hover{background:var(--paper-2)}
+  button:hover{filter:brightness(1.08)}
+  button[disabled]{opacity:.4;cursor:not-allowed}
+
+  /* mapping grid */
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  .map-t th,.map-t td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:middle}
+  .map-t th{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--ink-soft);background:var(--paper-2);font-weight:600}
+  .map-t code{font-family:var(--mono);font-size:12.5px}
+  .req{color:var(--block);font-weight:700;margin-left:4px}
+  select{
+    font-family:var(--mono);font-size:12.5px;padding:6px 8px;
+    border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:3px;width:100%;
+  }
+  .auto{font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
+  .auto.hit{color:var(--accent)}
+
+  /* report */
+  .summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  .chip{
+    font-family:var(--mono);font-size:12px;letter-spacing:.04em;
+    padding:8px 12px;border-radius:3px;border:1px solid var(--line-strong);background:var(--card);
+  }
+  .chip b{font-size:16px;display:block;letter-spacing:0}
+  .chip.block{border-color:var(--block);background:var(--block-bg);color:var(--block)}
+  .chip.confirm{border-color:var(--confirm);background:var(--confirm-bg);color:var(--confirm)}
+  .chip.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
+
+  .ledger-wrap{border:1px solid var(--line);max-height:460px;overflow:auto}
+  .ledger{font-size:13px}
+  .ledger th,.ledger td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  .ledger th{position:sticky;top:0;background:var(--paper-2);font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--ink-soft);z-index:1}
+  .ledger td.id{font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .ledger td.field{font-family:var(--mono);font-size:12px}
+  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 7px;border-radius:10px;white-space:nowrap}
+  .pill.block{background:var(--block-bg);color:var(--block);border:1px solid var(--block)}
+  .pill.confirm{background:var(--confirm-bg);color:var(--confirm);border:1px solid var(--confirm)}
+  .pill.soft{background:var(--paper-2);color:var(--ink-soft);border:1px solid var(--line-strong)}
+  .sugg{color:var(--confirm);font-family:var(--mono);font-size:12px}
+
+  .opt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);margin:4px 0}
+  .opt input{width:16px;height:16px;accent-color:var(--accent)}
+  .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+  .note{font-size:12.5px;color:var(--ink-soft);margin-top:12px;border-left:3px solid var(--line-strong);padding-left:12px}
+  .err{color:var(--block);font-family:var(--mono);font-size:13px;margin-top:10px}
+  .empty{font-family:var(--mono);color:var(--ink-soft);font-size:13px;padding:20px;text-align:center}
+  a.dl{color:var(--accent);font-family:var(--mono);font-size:13px}
+  footer{margin-top:34px;font-family:var(--mono);font-size:11px;color:var(--ink-soft);letter-spacing:.05em;text-align:center}
+  @media (max-width:640px){
+    .stamp{display:none}
+    input[type=text]{min-width:0}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div>
+      <div class="word">FEED<b>·</b>INSPECTOR</div>
+    </div>
+    <div class="tag">One supplier file in, one clean import-ready file out. Flags missing weight, dimensions, barcodes and GPSR fields before they cost you margin or a delisted partner.</div>
+    <div class="stamp">v0 · INSPECTION COPY</div>
+  </header>
+
+  <!-- STEP 1: load -->
+  <section class="step" id="s1">
+    <div class="step-h"><span class="num">1</span><h2>Load a supplier file</h2><span class="sub" id="s1sub">XML · CSV · XLSX</span></div>
+    <div class="step-b">
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file">
+        <div class="big">Drop a file here or click to choose</div>
+        <div class="small">Nothing leaves your browser. Files are parsed locally.</div>
+        <div class="formats">.xml &nbsp;·&nbsp; .csv &nbsp;·&nbsp; .xlsx &nbsp;·&nbsp; .xls</div>
+      </div>
+      <input type="file" id="file" accept=".xml,.csv,.xlsx,.xls,text/xml,text/csv" hidden>
+      <div class="row-inline">
+        <input type="text" id="url" placeholder="…or paste a direct file URL (CORS permitting)">
+        <button class="ghost" id="fetchBtn">Fetch URL</button>
+      </div>
+      <div class="err" id="s1err" hidden></div>
+    </div>
+  </section>
+
+  <!-- STEP 2: map -->
+  <section class="step" id="s2" hidden>
+    <div class="step-h"><span class="num">2</span><h2>Confirm column mapping</h2><span class="sub" id="s2sub"></span></div>
+    <div class="step-b">
+      <div class="row-inline">
+        <input type="text" id="supplier" placeholder="Supplier name (saves this mapping for next time)">
+        <button class="ghost" id="loadProfile">Load saved mapping</button>
+        <button class="ghost" id="saveProfile">Save mapping</button>
+      </div>
+      <div style="overflow:auto;margin-top:14px">
+        <table class="map-t" id="mapT">
+          <thead><tr><th>Target field</th><th>Source column</th><th>Auto-detect</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button id="runBtn">Inspect feed</button>
+        <span class="auto" id="profMsg"></span>
+      </div>
+      <div class="note">Required fields are marked <span class="req">*</span>. Estimated values are never written into the clean file silently. They appear only in the exceptions report, labelled "confirm", for a person to accept.</div>
+    </div>
+  </section>
+
+  <!-- STEP 3: report -->
+  <section class="step" id="s3" hidden>
+    <div class="step-h"><span class="num">3</span><h2>Inspection report</h2><span class="sub" id="s3sub"></span></div>
+    <div class="step-b">
+      <div class="summary" id="summary"></div>
+
+      <div class="opt"><input type="checkbox" id="optBlock" checked><label for="optBlock">Exclude rows with critical gaps from the clean file</label></div>
+
+      <div class="actions" style="margin-top:6px;margin-bottom:18px">
+        <button id="dlClean">Download clean file (.csv)</button>
+        <button class="ghost" id="dlExc">Download exceptions report (.csv)</button>
+        <button class="ghost" id="restart">Start over</button>
+      </div>
+
+      <div class="ledger-wrap">
+        <table class="ledger" id="ledgerT">
+          <thead><tr><th>Row / SKU</th><th>Field</th><th>Tier</th><th>What we found</th><th>Suggested</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="note">Tiers — <b>block</b>: critical gap, costs margin or breaks import. <b>confirm</b>: we can estimate, you decide. <b>soft</b>: optional or GPSR field presence only, no legal judgement made here. The responsible person at your business owns the compliance decision.</div>
+    </div>
+  </section>
+
+  <footer>FEED-INSPECTOR · flags and reports · does not certify compliance · does not decide for you</footer>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- canonical target schema ---------- */
+const FIELDS = [
+  {key:"sku",        label:"SKU / ID",            req:true,  syn:["sku","id","kod","symbol","index","indeks","artikelnummer","art_nr","artnr","product_id","identyfikator","kod_produktu","ref"]},
+  {key:"name",       label:"Name",                req:true,  syn:["name","nazwa","title","tytul","bezeichnung","produkt","product_name","nazwa_produktu","opis_krotki"]},
+  {key:"ean",        label:"EAN / GTIN",          req:true,  syn:["ean","gtin","barcode","kod_kreskowy","kodkreskowy","ean13","gtin13","upc"]},
+  {key:"price",      label:"Price (net)",         req:true,  syn:["price","cena","preis","netto","price_net","cena_netto","cena_zakupu","unit_price","kwota"]},
+  {key:"currency",   label:"Currency",            req:false, syn:["currency","waluta","waehrung","wahrung","cur","ccy"]},
+  {key:"weight_kg",  label:"Weight (kg)",         req:true,  syn:["weight","waga","gewicht","masa","weight_kg","waga_kg","mass","ciezar","ciężar"]},
+  {key:"length_cm",  label:"Length (cm)",         req:true,  syn:["length","dlugosc","długość","laenge","lange","len","dlug","depth","glebokosc","głębokość"]},
+  {key:"width_cm",   label:"Width (cm)",          req:true,  syn:["width","szerokosc","szerokość","breite","wid","szer"]},
+  {key:"height_cm",  label:"Height (cm)",         req:true,  syn:["height","wysokosc","wysokość","hoehe","hohe","hgt","wys"]},
+  {key:"brand",      label:"Brand",               req:false, syn:["brand","marka","manufacturer","producent","hersteller","marke","brand_name","vendor"]},
+  {key:"category",   label:"Category",            req:false, syn:["category","kategoria","kategorie","cat","group","grupa","typ"]},
+  {key:"gpsr_manufacturer", label:"GPSR · manufacturer", req:false, syn:["manufacturer_address","producent_adres","hersteller_adresse","manufacturer_info","gpsr_manufacturer","manufacturer_contact","dane_producenta"]},
+  {key:"gpsr_responsible",  label:"GPSR · responsible person", req:false, syn:["responsible_person","responsible","osoba_odpowiedzialna","gpsr_responsible","eu_representative","authorised_representative","authorized_representative","podmiot_odpowiedzialny"]},
+  {key:"gpsr_warnings",     label:"GPSR · safety warnings", req:false, syn:["warnings","ostrzezenia","ostrzeżenia","safety_warning","warnhinweise","safety","safety_info","instrukcje_bezpieczenstwa"]},
+];
+const GPSR_KEYS = ["gpsr_manufacturer","gpsr_responsible","gpsr_warnings"];
+const DIM_KEYS = ["length_cm","width_cm","height_cm"];
+
+/* weight estimate heuristic — only fires on a keyword match, never a blind guess */
+const WEIGHT_HINTS = [
+  {re:/(rower|bike|fahrrad|велос)/i,                          range:[8,18],  oversize:true},
+  {re:/(biurko|desk|schreibtisch|stol|stół|table|tisch)/i,    range:[15,40], oversize:true},
+  {re:/(szafa|wardrobe|schrank|komoda|regal|shelf|regał)/i,   range:[20,60], oversize:true},
+  {re:/(sofa|kanapa|fotel|armchair|couch)/i,                  range:[25,70], oversize:true},
+  {re:/(bieznia|bieżnia|treadmill|orbitrek|elliptical|rowerek)/i, range:[25,90], oversize:true},
+  {re:/(namiot|tent|zelt|kajak|kayak|canoe)/i,                range:[5,25],  oversize:true},
+  {re:/(hantle|dumbbell|kettlebell|obciazenie|obciążenie|plate|sztanga|barbell)/i, range:[2,30], oversize:false},
+  {re:/(opona|tire|tyre|reifen)/i,                            range:[1,4],   oversize:false},
+];
+
+/* ---------- storage wrapper: artifact window.storage, else localStorage, else memory ---------- */
+const mem={};
+const store={
+  async set(k,v){
+    try{ if(window.storage&&window.storage.set){await window.storage.set(k,JSON.stringify(v),false);return;} }catch(e){}
+    try{ localStorage.setItem(k,JSON.stringify(v));return; }catch(e){}
+    mem[k]=v;
+  },
+  async get(k){
+    try{ if(window.storage&&window.storage.get){const r=await window.storage.get(k,false);return r?JSON.parse(r.value):null;} }catch(e){}
+    try{ const r=localStorage.getItem(k);return r?JSON.parse(r):null; }catch(e){}
+    return (k in mem)?mem[k]:null;
+  }
+};
+
+/* ---------- state ---------- */
+let DATA={headers:[],rows:[]};   // parsed source
+let MAP={};                      // canonicalKey -> sourceHeader ("" = unmapped)
+let REPORT=null;                 // {clean, exceptions, counts}
+
+/* ---------- helpers ---------- */
+const $=s=>document.querySelector(s);
+const norm=s=>String(s||"").toLowerCase().replace(/[\s._\-\/]+/g,"").trim();
+function show(id){$(id).hidden=false}
+function hide(id){$(id).hidden=true}
+function setErr(msg){const e=$("#s1err");if(!msg){e.hidden=true;return}e.hidden=false;e.textContent=msg}
+
+/* ---------- parsers ---------- */
+function parseCSV(text){
+  // delimiter sniff
+  const head=text.slice(0,4000);
+  const delim=[";","\t","|",","].sort((a,b)=>(head.split(b).length-head.split(a).length))[0]||",";
+  const rows=[];let i=0,field="",row=[],q=false;
+  const push=()=>{row.push(field);field=""};
+  const eol=()=>{push();rows.push(row);row=[]};
+  while(i<text.length){
+    const c=text[i];
+    if(q){
+      if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; }
+      else field+=c;
+    }else{
+      if(c==='"')q=true;
+      else if(c===delim)push();
+      else if(c==='\n')eol();
+      else if(c==='\r'){/*skip*/}
+      else field+=c;
+    }
+    i++;
+  }
+  if(field.length||row.length)eol();
+  const headers=(rows.shift()||[]).map(h=>h.trim());
+  const objs=rows.filter(r=>r.some(c=>String(c).trim()!=="")).map(r=>{
+    const o={};headers.forEach((h,idx)=>o[h]=(r[idx]!==undefined?String(r[idx]).trim():""));return o;
+  });
+  return {headers,rows:objs};
+}
+
+function parseXLSX(buf){
+  if(typeof XLSX==="undefined")throw new Error("XLSX library did not load. Use CSV or XML, or check your network.");
+  const wb=XLSX.read(buf,{type:"array"});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const arr=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
+  const headers=(arr.shift()||[]).map(h=>String(h).trim());
+  const objs=arr.filter(r=>r.some(c=>String(c).trim()!=="")).map(r=>{
+    const o={};headers.forEach((h,idx)=>o[h]=(r[idx]!==undefined?String(r[idx]).trim():""));return o;
+  });
+  return {headers,rows:objs};
+}
+
+function parseXML(text){
+  const doc=new DOMParser().parseFromString(text,"text/xml");
+  if(doc.querySelector("parsererror"))throw new Error("This file is not valid XML.");
+  // find the repeating product node: the element name that occurs most often and has children/attrs
+  const counts={};
+  doc.querySelectorAll("*").forEach(el=>{
+    const hasContent=el.children.length>0||el.attributes.length>0;
+    if(hasContent)counts[el.tagName]=(counts[el.tagName]||0)+1;
+  });
+  let best=null,bestN=0;
+  for(const tag in counts){ if(counts[tag]>bestN&&counts[tag]>1){best=tag;bestN=counts[tag];} }
+  if(!best)throw new Error("Could not find repeating product records in this XML.");
+  const nodes=[...doc.getElementsByTagName(best)];
+  const headerSet=new Set();
+  const records=nodes.map(node=>{
+    const o={};
+    // attributes on the product node
+    for(const a of node.attributes){const k="@"+a.name;o[k]=a.value.trim();headerSet.add(k);}
+    // direct children, flattened one level (path keys for nesting)
+    const walk=(el,prefix)=>{
+      for(const ch of el.children){
+        const key=prefix?prefix+"/"+ch.tagName:ch.tagName;
+        for(const a of ch.attributes){const ak=key+"@"+a.name;o[ak]=a.value.trim();headerSet.add(ak);}
+        if(ch.children.length){ walk(ch,key); }
+        else { const t=ch.textContent.trim(); if(t!==""||!(key in o)){o[key]=t;headerSet.add(key);} }
+      }
+    };
+    walk(node,"");
+    return o;
+  });
+  return {headers:[...headerSet],rows:records};
+}
+
+/* ---------- auto mapping ---------- */
+function autoMap(headers){
+  const m={};const used=new Set();
+  const normHeaders=headers.map(h=>({raw:h,n:norm(h.replace(/^@/,"").split("/").pop())}));
+  for(const f of FIELDS){
+    let pick="",score=-1;
+    for(const h of normHeaders){
+      if(used.has(h.raw))continue;
+      let s=-1;
+      for(const syn of f.syn){
+        const ns=norm(syn);
+        if(h.n===ns)s=Math.max(s,3);
+        else if(h.n.startsWith(ns)||ns.startsWith(h.n))s=Math.max(s,2);
+        else if(h.n.includes(ns)||ns.includes(h.n))s=Math.max(s,1);
+      }
+      if(s>score){score=s;pick=h.raw;}
+    }
+    if(score>=1){m[f.key]=pick;used.add(pick);}
+    else m[f.key]="";
+  }
+  return m;
+}
+
+/* ---------- numeric parse ---------- */
+function num(v){
+  if(v===undefined||v===null)return null;
+  let s=String(v).trim();if(s==="")return null;
+  s=s.replace(/[^\d,.\-]/g,"");
+  if(s.indexOf(",")>-1&&s.indexOf(".")>-1)s=s.replace(/\./g,"").replace(",",".");
+  else if(s.indexOf(",")>-1)s=s.replace(",",".");
+  const n=parseFloat(s);return isNaN(n)?null:n;
+}
+function eanValid(v){
+  const s=String(v||"").replace(/\D/g,"");
+  return [8,12,13,14].includes(s.length);
+}
+function estimateWeight(name,cat){
+  const hay=((name||"")+" "+(cat||"")).toLowerCase();
+  for(const h of WEIGHT_HINTS){ if(h.re.test(hay))return h; }
+  return null;
+}
+
+/* ---------- validation engine ---------- */
+function inspect(){
+  const get=(row,key)=>{const src=MAP[key];return src?row[src]:undefined;};
+  const clean=[];const exc=[];
+  let blockRows=0,confirmRows=0,okRows=0;
+
+  DATA.rows.forEach((row,idx)=>{
+    const rowId=get(row,"sku")||get(row,"ean")||("row "+(idx+1));
+    const out={};FIELDS.forEach(f=>out[f.key]=get(row,f.key)!==undefined?get(row,f.key):"");
+    let rowBlock=false,rowConfirm=false;
+    const add=(field,tier,found,sugg)=>{exc.push({rowId,field,tier,found,sugg:sugg||""});};
+
+    // required core
+    if(!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
+    if(!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
+
+    // ean
+    const ean=String(out.ean).trim();
+    if(!ean){add("ean","block","missing");rowBlock=true;}
+    else if(!eanValid(ean)){add("ean","block","invalid length: "+ean.replace(/\D/g,"").length+" digits");rowBlock=true;}
+
+    // price + currency
+    const price=num(out.price);
+    if(price===null){add("price","block","missing or non-numeric");rowBlock=true;}
+    else if(price<=0){add("price","block","not positive: "+price);rowBlock=true;}
+    if(!String(out.currency).trim()){add("currency","soft","missing");}
+
+    // weight — the margin protector
+    const w=num(out.weight_kg);
+    if(w===null||w<=0){
+      const est=estimateWeight(out.name,out.category);
+      if(est){add("weight_kg","confirm","missing",est.range[0]+"–"+est.range[1]+" kg"+(est.oversize?" · likely oversize":""));rowConfirm=true;}
+      else{add("weight_kg","block","missing, no reliable estimate");rowBlock=true;}
+    }
+
+    // dimensions
+    const dims=DIM_KEYS.map(k=>num(out[k]));
+    const missingDims=DIM_KEYS.filter((k,i)=>dims[i]===null||dims[i]<=0);
+    if(missingDims.length){
+      const est=estimateWeight(out.name,out.category);
+      if(est&&est.oversize){add("dimensions","confirm","missing: "+missingDims.map(k=>k.replace("_cm","")).join(", "),"likely oversize, dimensions required");rowConfirm=true;}
+      else{add("dimensions","block","missing: "+missingDims.map(k=>k.replace("_cm","")).join(", "));rowBlock=true;}
+    }else{
+      const maxDim=Math.max(...dims);
+      if(maxDim>120){add("dimensions","soft","oversize: "+maxDim+" cm","check carrier surcharge");}
+    }
+
+    // gpsr — presence only, no legal interpretation
+    GPSR_KEYS.forEach(k=>{
+      if(MAP[k]===""||!String(out[k]).trim()){
+        add(k,"soft","GPSR field not present");
+      }
+    });
+
+    if(rowBlock)blockRows++;else if(rowConfirm)confirmRows++;else okRows++;
+    clean.push({out,rowBlock,rowConfirm});
+  });
+
+  REPORT={clean,exc,counts:{total:DATA.rows.length,blockRows,confirmRows,okRows}};
+}
+
+/* ---------- rendering ---------- */
+function renderMap(){
+  const tb=$("#mapT tbody");tb.innerHTML="";
+  const opts=h=>`<option value="">— not in file —</option>`+DATA.headers.map(x=>`<option value="${esc(x)}"${MAP[h.key]===x?" selected":""}>${esc(x)}</option>`).join("");
+  FIELDS.forEach(f=>{
+    const tr=document.createElement("tr");
+    const hit=MAP[f.key]!=="";
+    tr.innerHTML=`<td><code>${f.key}</code>${f.req?'<span class="req">*</span>':''}<br><span class="auto">${esc(f.label)}</span></td>
+      <td><select data-k="${f.key}">${opts(f)}</select></td>
+      <td><span class="auto ${hit?'hit':''}">${hit?'matched → '+esc(MAP[f.key]):'no match'}</span></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll("select").forEach(sel=>sel.addEventListener("change",e=>{
+    MAP[e.target.dataset.k]=e.target.value;
+    const cell=e.target.closest("tr").querySelector(".auto.hit,.auto");
+    cell.textContent=e.target.value?("set → "+e.target.value):"no match";
+    cell.classList.toggle("hit",!!e.target.value);
+  }));
+}
+function renderReport(){
+  const c=REPORT.counts;
+  $("#summary").innerHTML=`
+    <div class="chip"><b>${c.total}</b>rows read</div>
+    <div class="chip block"><b>${c.blockRows}</b>blocked · critical gap</div>
+    <div class="chip confirm"><b>${c.confirmRows}</b>need confirm</div>
+    <div class="chip ok"><b>${c.okRows}</b>clean</div>
+    <div class="chip"><b>${REPORT.exc.length}</b>total flags</div>`;
+  const tb=$("#ledgerT tbody");tb.innerHTML="";
+  if(!REPORT.exc.length){tb.innerHTML=`<tr><td colspan="5" class="empty">No gaps found. This feed is clean.</td></tr>`;}
+  else{
+    const order={block:0,confirm:1,soft:2};
+    REPORT.exc.slice().sort((a,b)=>order[a.tier]-order[b.tier]).forEach(x=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td class="id">${esc(x.rowId)}</td>
+        <td class="field">${esc(x.field)}</td>
+        <td><span class="pill ${x.tier}">${x.tier}</span></td>
+        <td>${esc(x.found)}</td>
+        <td class="sugg">${esc(x.sugg)}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+  $("#s3sub").textContent=c.total+" rows inspected";
+}
+function esc(s){return String(s===undefined?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
+
+/* ---------- exports ---------- */
+function toCSV(headers,rows){
+  const q=v=>{v=String(v===undefined||v===null?"":v);return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  return [headers.map(q).join(";")].concat(rows.map(r=>headers.map(h=>q(r[h])).join(";"))).join("\r\n");
+}
+function download(name,csv){
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+function exportClean(){
+  const block=$("#optBlock").checked;
+  const heads=FIELDS.map(f=>f.key);
+  const rows=REPORT.clean.filter(r=>!(block&&r.rowBlock)).map(r=>r.out);
+  download("clean-feed.csv",toCSV(heads,rows));
+}
+function exportExc(){
+  download("exceptions-report.csv",toCSV(["rowId","field","tier","found","suggested"],
+    REPORT.exc.map(x=>({rowId:x.rowId,field:x.field,tier:x.tier,found:x.found,suggested:x.sugg}))));
+}
+
+/* ---------- flow ---------- */
+async function ingest(name,content,kind){
+  setErr("");
+  try{
+    if(kind==="xml")DATA=parseXML(content);
+    else if(kind==="xlsx")DATA=parseXLSX(content);
+    else DATA=parseCSV(content);
+    if(!DATA.headers.length||!DATA.rows.length)throw new Error("No rows found in this file.");
+    MAP=autoMap(DATA.headers);
+    $("#s2sub").textContent=DATA.rows.length+" rows · "+DATA.headers.length+" columns";
+    $("#s1sub").textContent=name;
+    renderMap();show("#s2");hide("#s3");
+    $("#s2").scrollIntoView({behavior:"smooth",block:"start"});
+  }catch(err){setErr(err.message||String(err));}
+}
+function readFile(file){
+  const name=file.name.toLowerCase();
+  const kind=name.endsWith(".xml")?"xml":(name.endsWith(".xlsx")||name.endsWith(".xls"))?"xlsx":"csv";
+  const fr=new FileReader();
+  fr.onerror=()=>setErr("Could not read the file.");
+  fr.onload=()=>ingest(file.name,fr.result,kind);
+  if(kind==="xlsx")fr.readAsArrayBuffer(file);else fr.readAsText(file,"utf-8");
+}
+
+/* ---------- wire up ---------- */
+$("#drop").addEventListener("click",()=>$("#file").click());
+$("#drop").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#file").click();}});
+$("#file").addEventListener("change",e=>{if(e.target.files[0])readFile(e.target.files[0]);});
+["dragenter","dragover"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.add("over");}));
+["dragleave","drop"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.remove("over");}));
+$("#drop").addEventListener("drop",e=>{if(e.dataTransfer.files[0])readFile(e.dataTransfer.files[0]);});
+
+$("#fetchBtn").addEventListener("click",async()=>{
+  const u=$("#url").value.trim();if(!u)return;
+  setErr("");
+  try{
+    const res=await fetch(u);if(!res.ok)throw new Error("Fetch failed: "+res.status);
+    const kind=u.toLowerCase().endsWith(".xml")?"xml":(u.toLowerCase().endsWith(".xlsx")||u.toLowerCase().endsWith(".xls"))?"xlsx":"csv";
+    if(kind==="xlsx")ingest(u,await res.arrayBuffer(),"xlsx");else ingest(u,await res.text(),kind);
+  }catch(err){setErr((err.message||err)+" — most direct file URLs block cross-origin fetch. Download the file and drop it above instead.");}
+});
+
+$("#runBtn").addEventListener("click",()=>{
+  const missing=FIELDS.filter(f=>f.req&&MAP[f.key]==="").map(f=>f.key);
+  inspect();renderReport();show("#s3");
+  $("#s3").scrollIntoView({behavior:"smooth",block:"start"});
+});
+
+$("#saveProfile").addEventListener("click",async()=>{
+  const sup=$("#supplier").value.trim();
+  if(!sup){$("#profMsg").textContent="Enter a supplier name first.";return;}
+  await store.set("map:"+norm(sup),MAP);
+  $("#profMsg").textContent="Mapping saved for “"+sup+"”.";
+});
+$("#loadProfile").addEventListener("click",async()=>{
+  const sup=$("#supplier").value.trim();
+  if(!sup){$("#profMsg").textContent="Enter a supplier name first.";return;}
+  const saved=await store.get("map:"+norm(sup));
+  if(!saved){$("#profMsg").textContent="No saved mapping for “"+sup+"”.";return;}
+  // only apply keys whose source column still exists in this file
+  FIELDS.forEach(f=>{ if(saved[f.key]&&DATA.headers.includes(saved[f.key]))MAP[f.key]=saved[f.key]; });
+  renderMap();$("#profMsg").textContent="Loaded saved mapping for “"+sup+"”.";
+});
+
+$("#dlClean").addEventListener("click",exportClean);
+$("#dlExc").addEventListener("click",exportExc);
+$("#restart").addEventListener("click",()=>{DATA={headers:[],rows:[]};MAP={};REPORT=null;hide("#s2");hide("#s3");$("#file").value="";$("#s1sub").textContent="XML · CSV · XLSX";window.scrollTo({top:0,behavior:"smooth"});});
+</script>
+</body>
+</html>
