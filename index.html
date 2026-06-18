@@ -127,6 +127,16 @@
   .auto.hit{color:var(--accent)}
 
   /* report */
+  .heroes{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px}
+  .hero{flex:1 1 240px;border:1.5px solid var(--line-strong);background:var(--card);padding:16px 18px;border-radius:4px}
+  .hero .hl{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+  .hero .hv{font-family:var(--mono);font-size:40px;line-height:1.1;font-weight:700;margin:4px 0 2px}
+  .hero .hv span{font-size:20px;margin-left:2px}
+  .hero .hs{font-size:12.5px;color:var(--ink-soft)}
+  .hero.good{border-color:var(--ok);background:var(--ok-bg)} .hero.good .hv{color:var(--ok)}
+  .hero.warn{border-color:var(--confirm);background:var(--confirm-bg)} .hero.warn .hv{color:var(--confirm)}
+  .hero.bad{border-color:var(--block);background:var(--block-bg)} .hero.bad .hv{color:var(--block)}
+  .hero.na .hv{font-size:22px;color:var(--ink-soft);margin-top:8px}
   .summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
   .notices{border:1px solid var(--line);background:var(--card);padding:12px 14px;margin-bottom:18px}
   .notices-h{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-soft);text-transform:uppercase;margin-bottom:8px}
@@ -176,7 +186,7 @@
     <div>
       <div class="word">FEED<b>·</b>INSPECTOR</div>
     </div>
-    <div class="tag">One supplier file in, one clean import-ready file out. Flags missing weight, dimensions, barcodes and GPSR fields before they cost you margin or a delisted partner.</div>
+    <div class="tag">Drop a supplier feed, get one clean import-ready file. Leads on the two that cost you most: missing weight and missing brand across the catalog.</div>
     <div class="stamp">v0 · INSPECTION COPY</div>
   </header>
 
@@ -225,6 +235,7 @@
   <section class="step" id="s3" hidden>
     <div class="step-h"><span class="num">3</span><h2>Inspection report</h2><span class="sub" id="s3sub"></span></div>
     <div class="step-b">
+      <div class="heroes" id="heroes"></div>
       <div class="summary" id="summary"></div>
 
       <div class="notices" id="notices" hidden></div>
@@ -489,6 +500,7 @@ function inspect(){
   const dimsUnmapped=DIM_KEYS.every(unmapped);
   const clean=[];const exc=[];const notices=[];
   let blockRows=0,confirmRows=0,okRows=0;
+  let weightMissing=0,brandMissing=0,brandSuggested=0;        // the two hero fields
 
   // Feed-level notices for fields that simply are not in the file. One line each,
   // instead of repeating the same flag on every one of 25k rows.
@@ -496,8 +508,22 @@ function inspect(){
     if(DIM_KEYS.includes(f.key)||GPSR_KEYS.includes(f.key))return;
     if(unmapped(f.key))notices.push({tier:f.req?"block":"soft",field:f.key,msg:f.label+" not mapped to any column, affects all "+DATA.rows.length+" rows"});
   });
-  if(dimsUnmapped)notices.push({tier:"block",field:"dimensions",msg:"No dimension columns (length / width / height) in this feed, all "+DATA.rows.length+" rows ship without size data"});
+  if(dimsUnmapped)notices.push({tier:"soft",field:"dimensions",msg:"No dimension columns yet (optional for now, can be added later)"});
   GPSR_KEYS.forEach(k=>{if(unmapped(k))notices.push({tier:"soft",field:k,msg:k.replace("gpsr_","GPSR ")+" not present in this feed"});});
+
+  // Brand dictionary, learned from the brand values already present in this feed.
+  // Used only to SUGGEST a brand where it is missing but the product name contains a
+  // known brand. Never written silently; always surfaced as a confirm-tier suggestion.
+  let brandRe=null;
+  if(!unmapped("brand")){
+    const seen=new Set();
+    DATA.rows.forEach(r=>{const b=String(r[MAP.brand]||"").trim();if(b.length>=2&&!/^\d+$/.test(b))seen.add(b);});
+    const list=[...seen].sort((a,b)=>b.length-a.length).slice(0,3000);
+    if(list.length){
+      const reEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+      try{brandRe=new RegExp("\\b("+list.map(reEsc).join("|")+")\\b","i");}catch(e){brandRe=null;}
+    }
+  }
 
   // EAN-elsewhere detector: if the mapped EAN is empty, look for a barcode hiding in another column
   const onlyDigits=v=>String(v||"").trim().replace(/\s/g,"");
@@ -527,33 +553,40 @@ function inspect(){
       else if(price<=0){add("price","block","not positive: "+price);rowBlock=true;}
     }
 
+    // WEIGHT, hero field #1. Missing weight is the headline gap to chase per supplier.
     let w=null;
     if(!unmapped("weight_kg")){
       w=num(out.weight_kg);
       if(w===null||w<=0){
+        weightMissing++;
         const est=estimateWeight(out.name,out.category);
-        if(est){add("weight_kg","confirm","missing",est.range[0]+"-"+est.range[1]+" kg"+(est.oversize?" · likely oversize":""));rowConfirm=true;}
-        else{add("weight_kg","block","missing, no reliable estimate");rowBlock=true;}
+        if(est){add("weight_kg","confirm","missing",est.range[0]+"-"+est.range[1]+" kg (estimate, confirm with supplier)");rowConfirm=true;}
+        else{add("weight_kg","block","missing");rowBlock=true;}
         w=null;
       }
     }
 
-    // Dimensions. When dims are missing we only raise a per-row flag for the items
-    // where it actually costs money: heavy items (by real weight). The name keyword
-    // is only a fallback when weight is unknown, a known light weight overrides it.
-    const weightKnown=(w!==null);
-    const heavy=(weightKnown&&w>=OVERSIZE_KG);
-    const est=estimateWeight(out.name,out.category);
-    const oversizeByName=(!weightKnown&&est&&est.oversize);
-    if(dimsUnmapped){
-      if(heavy){add("dimensions","confirm","no dimensions; weight "+w+" kg","heavy item, dimensions required for carrier pricing");rowConfirm=true;}
-      else if(oversizeByName){add("dimensions","confirm","no dimensions","likely oversize ("+est.range.join("-")+" kg), dimensions required");rowConfirm=true;}
-    }else{
+    // BRAND, hero field #2. Catalog completeness. Suggest from name only, never invent.
+    if(!unmapped("brand")){
+      const b=String(out.brand||"").trim();
+      if(!b){
+        brandMissing++;
+        let sugg="";
+        if(brandRe){const mm=String(out.name||"").match(brandRe);if(mm)sugg="from name: "+mm[1];}
+        if(sugg){add("brand","confirm","missing",sugg);rowConfirm=true;brandSuggested++;}
+        else{add("brand","block","missing");rowBlock=true;}
+      }
+    }
+
+    // Dimensions, optional for now. Only checked when the columns actually exist; no
+    // per-row noise while the feed carries no dimension data.
+    if(!dimsUnmapped){
       const dims=DIM_KEYS.map(k=>unmapped(k)?null:num(out[k]));
       const missing=DIM_KEYS.filter((k,i)=>!unmapped(k)&&(dims[i]===null||dims[i]<=0));
       if(missing.length){
-        if(heavy||oversizeByName){add("dimensions","confirm","missing: "+missing.map(k=>k.replace("_cm","")).join(", "),(heavy?"heavy "+w+" kg, ":"")+"dimensions required");rowConfirm=true;}
-        else{add("dimensions","block","missing: "+missing.map(k=>k.replace("_cm","")).join(", "));rowBlock=true;}
+        const heavy=(w!==null&&w>=OVERSIZE_KG);
+        if(heavy){add("dimensions","confirm","missing: "+missing.map(k=>k.replace("_cm","")).join(", "),"heavy "+w+" kg, dimensions help carrier pricing");rowConfirm=true;}
+        else{add("dimensions","soft","missing: "+missing.map(k=>k.replace("_cm","")).join(", "));}
       }else{
         const present=dims.filter(d=>d!==null);const maxDim=present.length?Math.max(...present):0;
         if(maxDim>120){add("dimensions","soft","oversize: "+maxDim+" cm","check carrier surcharge");}
@@ -573,7 +606,11 @@ function inspect(){
     notices.push({tier:"confirm",field:"ean",msg:eanCols[0][1]+" rows with no EAN in the mapped column have a valid barcode in “"+eanCols[0][0]+"”, consider remapping EAN to it"});
   }
 
-  REPORT={clean,exc,notices,counts:{total:DATA.rows.length,blockRows,confirmRows,okRows}};
+  REPORT={clean,exc,notices,counts:{
+    total:DATA.rows.length,blockRows,confirmRows,okRows,
+    weightMapped:!unmapped("weight_kg"),weightMissing,
+    brandMapped:!unmapped("brand"),brandMissing,brandSuggested
+  }};
 }
 
 /* ---------- rendering ---------- */
@@ -597,12 +634,21 @@ function renderMap(){
 }
 function renderReport(){
   const c=REPORT.counts;
+  const pct=(miss)=>c.total?Math.round((c.total-miss)/c.total*100):0;
+  const heroCard=(label,mapped,miss,extra)=>{
+    if(!mapped)return `<div class="hero na"><div class="hl">${label}</div><div class="hv">not mapped</div><div class="hs">no column selected for this field</div></div>`;
+    const p=pct(miss);const cls=p>=98?"good":p>=85?"warn":"bad";
+    return `<div class="hero ${cls}"><div class="hl">${label} completeness</div><div class="hv">${p}<span>%</span></div><div class="hs">${miss.toLocaleString()} of ${c.total.toLocaleString()} missing${extra||""}</div></div>`;
+  };
+  $("#heroes").innerHTML=
+    heroCard("Weight",c.weightMapped,c.weightMissing,"")+
+    heroCard("Brand",c.brandMapped,c.brandMissing,c.brandSuggested?(" · "+c.brandSuggested.toLocaleString()+" suggestible from name"):"");
   $("#summary").innerHTML=`
-    <div class="chip"><b>${c.total}</b>rows read</div>
-    <div class="chip block"><b>${c.blockRows}</b>blocked · critical gap</div>
-    <div class="chip confirm"><b>${c.confirmRows}</b>need confirm</div>
-    <div class="chip ok"><b>${c.okRows}</b>clean</div>
-    <div class="chip"><b>${REPORT.exc.length}</b>row flags</div>`;
+    <div class="chip"><b>${c.total.toLocaleString()}</b>rows read</div>
+    <div class="chip block"><b>${c.blockRows.toLocaleString()}</b>blocked · critical gap</div>
+    <div class="chip confirm"><b>${c.confirmRows.toLocaleString()}</b>need confirm</div>
+    <div class="chip ok"><b>${c.okRows.toLocaleString()}</b>clean</div>
+    <div class="chip"><b>${REPORT.exc.length.toLocaleString()}</b>row flags</div>`;
   // feed-level notices first, these are the headline findings about the whole feed
   const nb=$("#notices");
   if(REPORT.notices&&REPORT.notices.length){
