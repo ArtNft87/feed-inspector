@@ -405,25 +405,42 @@ function parseXML(text){
   return {headers:[...headerSet],rows:records};
 }
 
-/* ---------- auto mapping ---------- */
+/* ---------- auto mapping ----------
+   Conservative on purpose. A wrong confident mapping silently corrupts the clean
+   file (e.g. a price written into the length column), which is worse than no
+   mapping at all. So: match only on whole-word tokens, never arbitrary substrings;
+   require a strong match; and when two columns tie, leave it unmapped for a human
+   to pick rather than guess. Under-mapping costs two clicks; mis-mapping costs margin. */
+function wordTokens(s){return String(s).toLowerCase().split(/[^a-z0-9ąćęłńóśźż]+/i).filter(Boolean);}
+function leafSeg(h){const p=h.split(/[\/@#]/).filter(s=>s&&!/^\d+$/.test(s));return p.length?p[p.length-1]:h;}
+function depth(h){return h.split(/[\/@#]/).filter(Boolean).length;}
+
 function autoMap(headers){
   const m={};const used=new Set();
-  const normHeaders=headers.map(h=>({raw:h,n:norm(h.split(/[\/@]/).pop())}));
-  for(const f of FIELDS){
-    let pick="",score=-1;
-    for(const h of normHeaders){
+  // precompute per-header tokens + normalized leaf
+  const H=headers.map(raw=>{const leaf=leafSeg(raw);return {raw,leafN:norm(leaf),toks:new Set(wordTokens(leaf)),d:depth(raw),len:raw.length};});
+  // precompute per-field synonym tokens + normalized forms
+  const syns=FIELDS.map(f=>({key:f.key,norms:f.syn.map(norm),toks:new Set([].concat(...f.syn.map(wordTokens)))}));
+
+  for(const fs of syns){
+    let top=-1;const cands=[];
+    for(const h of H){
       if(used.has(h.raw))continue;
-      let s=-1;
-      for(const syn of f.syn){
-        const ns=norm(syn);
-        if(h.n===ns)s=Math.max(s,3);
-        else if(h.n.startsWith(ns)||ns.startsWith(h.n))s=Math.max(s,2);
-        else if(h.n.includes(ns)||ns.includes(h.n))s=Math.max(s,1);
-      }
-      if(s>score){score=s;pick=h.raw;}
+      let s=0;
+      if(fs.norms.includes(h.leafN))s=3;                                   // whole leaf equals a synonym
+      else if([...h.toks].some(t=>fs.toks.has(t)))s=2;                      // a whole word matches
+      if(s>top){top=s;cands.length=0;cands.push(h);}
+      else if(s===top&&s>0)cands.push(h);
     }
-    if(score>=1){m[f.key]=pick;used.add(pick);}
-    else m[f.key]="";
+    if(top<2){m[fs.key]="";continue;}
+    // prefer the shallowest matches (a top-level field beats a nested one)
+    const minD=Math.min(...cands.map(c=>c.d));
+    const atMin=cands.filter(c=>c.d===minD);
+    // signature = the meaningful word tokens of the whole path, numeric indexes dropped
+    const sig=h=>[...new Set(wordTokens(h.raw).filter(t=>!/^\d+$/.test(t)))].sort().join("|");
+    const sigs=new Set(atMin.map(sig));
+    if(sigs.size>1){m[fs.key]="";}                                       // different meanings tie (e.g. retail vs wholesale) -> human picks
+    else{atMin.sort((a,b)=>a.raw.localeCompare(b.raw));m[fs.key]=atMin[0].raw;used.add(atMin[0].raw);}
   }
   return m;
 }
