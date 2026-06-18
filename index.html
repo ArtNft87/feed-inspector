@@ -140,6 +140,7 @@
   .summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
   .notices{border:1px solid var(--line);background:var(--card);padding:12px 14px;margin-bottom:18px}
   .notices-h{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-soft);text-transform:uppercase;margin-bottom:8px}
+  .vh{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.04em;margin:26px 0 10px;padding-top:18px;border-top:1px solid var(--line-strong)}
   .notice{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
   .notice:first-of-type{border-top:none}
   .notice .pill{flex:0 0 auto;margin-top:1px}
@@ -255,6 +256,21 @@
         </table>
       </div>
       <div class="note">Tiers, <b>block</b>: critical gap, costs margin or breaks import. <b>confirm</b>: we can estimate, you decide. <b>soft</b>: optional or GPSR field presence only, no legal judgement made here. The responsible person at your business owns the compliance decision.</div>
+
+      <div id="variantBlock" hidden>
+        <div class="vh">EAN gaps by variant</div>
+        <div class="actions" style="margin-top:0;margin-bottom:14px">
+          <button class="ghost" id="dlVarGaps">Download EAN gaps (.csv)</button>
+          <button class="ghost" id="dlVarAll">Download full variant map (.csv)</button>
+        </div>
+        <div class="ledger-wrap">
+          <table class="ledger" id="variantT">
+            <thead><tr><th>Product id</th><th>Product name</th><th>Variant uid</th><th>Size</th><th>EAN</th><th>State</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="note">Paste a <b>variant uid</b> into your search to jump straight to that size in the feed or your system. <b>empty</b>: no code. <b>junk</b>: something is there but it is not a real barcode.</div>
+      </div>
     </div>
   </section>
 
@@ -275,7 +291,7 @@ const FIELDS = [
   {key:"length_cm",  label:"Length (cm)",         req:true,  syn:["length","dlugosc","długość","laenge","lange","len","dlug","depth","glebokosc","głębokość"]},
   {key:"width_cm",   label:"Width (cm)",          req:true,  syn:["width","szerokosc","szerokość","breite","wid","szer"]},
   {key:"height_cm",  label:"Height (cm)",         req:true,  syn:["height","wysokosc","wysokość","hoehe","hohe","hgt","wys"]},
-  {key:"brand",      label:"Brand",               req:false, syn:["brand","marka","manufacturer","producent","hersteller","marke","brand_name","vendor"]},
+  {key:"brand",      label:"Brand",               req:false, syn:["brand","marka","manufacturer","producent","producer","hersteller","marke","brand_name","vendor"]},
   {key:"category",   label:"Category",            req:false, syn:["category","kategoria","kategorie","cat","group","grupa","typ"]},
   {key:"gpsr_manufacturer", label:"GPSR · manufacturer", req:false, syn:["manufacturer_address","producent_adres","hersteller_adresse","manufacturer_info","gpsr_manufacturer","manufacturer_contact","dane_producenta"]},
   {key:"gpsr_responsible",  label:"GPSR · responsible person", req:false, syn:["responsible_person","responsible","osoba_odpowiedzialna","gpsr_responsible","eu_representative","authorised_representative","authorized_representative","podmiot_odpowiedzialny"]},
@@ -373,7 +389,9 @@ const VALUE_ATTRS=["value","wartosc","wartość","val","v"];
 
 function flattenRecord(node,o,prefix){
   prefix=prefix||"";
-  for(const a of (node.attributes||[])) o[prefix+"@"+a.name]=String(a.value).trim();
+  // first non-empty value wins, so a column always exists but is not overwritten by a later blank
+  const put=(k,v)=>{v=String(v==null?"":v).trim();if(o[k]===undefined)o[k]=v;else if(o[k]===""&&v!=="")o[k]=v;};
+  for(const a of (node.attributes||[])) put(prefix+"@"+a.name,a.value);
   const byTag={};
   for(const ch of node.children){(byTag[ch.tagName]=byTag[ch.tagName]||[]).push(ch);}
   for(const tag in byTag){
@@ -384,19 +402,28 @@ function flattenRecord(node,o,prefix){
       group.forEach(ch=>{
         const nameAttr=[...ch.attributes].find(a=>NAME_ATTRS.includes(a.name.toLowerCase()));
         const valAttr=[...ch.attributes].find(a=>VALUE_ATTRS.includes(a.name.toLowerCase()));
-        const key=(prefix?prefix+"/":"")+String(nameAttr.value).trim();
-        const val=valAttr?valAttr.value:ch.textContent;
-        o[key]=String(val).trim();
+        put((prefix?prefix+"/":"")+String(nameAttr.value).trim(), valAttr?valAttr.value:ch.textContent);
       });
       continue;
     }
-    group.forEach((ch,i)=>{
-      const base=(prefix?prefix+"/":"")+tag+(group.length>1?("#"+(i+1)):"");
+    // Repeated (and single) non-pivot children collapse onto ONE base key, no #index.
+    // This is what keeps multi-variant fields like every size's EAN as a single
+    // representative column (first non-empty) instead of exploding into stock/item#1..#N.
+    const base=(prefix?prefix+"/":"")+tag;
+    // ...but also keep the full per-variant list when this is a repeated leaf group
+    // carrying attributes (e.g. <stock><item ean= uid= .../></stock>), so EAN can be
+    // checked at the variant level later without re-parsing.
+    const leafRepeated = group.length>1 && group.every(ch=>ch.children.length===0) && group.some(ch=>ch.attributes.length>0);
+    if(leafRepeated){
+      (o.__groups||(o.__groups={}))[base]=group.map(ch=>{
+        const v={_text:ch.textContent.trim()};
+        for(const a of ch.attributes)v[a.name]=String(a.value).trim();
+        return v;
+      });
+    }
+    group.forEach(ch=>{
       if(ch.children.length){ flattenRecord(ch,o,base); }
-      else{
-        for(const a of ch.attributes) o[base+"@"+a.name]=String(a.value).trim();
-        o[base]=ch.textContent.trim();
-      }
+      else{ for(const a of ch.attributes) put(base+"@"+a.name,a.value); put(base,ch.textContent); }
     });
   }
 }
@@ -421,7 +448,7 @@ function parseXML(text){
   if(!best){let n=0;for(const t of candidates){if(counts[t]>n){n=counts[t];best=t;}}}
   const nodes=[...doc.getElementsByTagName(best)];
   const headerSet=new Set();
-  const records=nodes.map(node=>{const o={};flattenRecord(node,o);Object.keys(o).forEach(k=>headerSet.add(k));return o;});
+  const records=nodes.map(node=>{const o={};flattenRecord(node,o);Object.keys(o).forEach(k=>{if(!k.startsWith("__"))headerSet.add(k);});return o;});
   return {headers:[...headerSet],rows:records};
 }
 
@@ -501,6 +528,11 @@ function inspect(){
   const clean=[];const exc=[];const notices=[];
   let blockRows=0,confirmRows=0,okRows=0;
   let weightMissing=0,brandMissing=0,brandSuggested=0;        // the two hero fields
+  let variantsTotal=0,eanValidCount=0,eanEmptyCount=0,eanJunkCount=0;  // variant-level EAN
+  const variantGaps=[];const allVariants=[];const VARCAP=500000;
+  // where the per-variant EAN lives, derived from the mapped EAN column
+  let varBase=null,varAttr=null;
+  if(MAP.ean&&MAP.ean.indexOf("@")>-1){const p=MAP.ean.split("@");varBase=p[0];varAttr=p[1];}
 
   // Feed-level notices for fields that simply are not in the file. One line each,
   // instead of repeating the same flag on every one of 25k rows.
@@ -539,12 +571,41 @@ function inspect(){
     if(!unmapped("sku")&&!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
     if(!unmapped("name")&&!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
 
+    // EAN at the VARIANT level. A product is one row, but each size variant has its
+    // own barcode. We classify every variant: valid / empty / junk (something there
+    // but not a real EAN, like 000043). The product is only flagged when not a single
+    // variant carries a valid code.
     if(!unmapped("ean")){
-      const ean=String(out.ean).trim();
-      if(!ean){
-        add("ean","block","missing");rowBlock=true;
-        for(const h of DATA.headers){ if(h!==MAP.ean&&eanLike(row[h])){eanElsewhere[h]=(eanElsewhere[h]||0)+1;break;} }
-      }else if(!eanValid(ean)){add("ean","block","invalid length: "+ean.replace(/\D/g,"").length+" digits");rowBlock=true;}
+      let variants=null;
+      if(varBase&&row.__groups&&row.__groups[varBase])variants=row.__groups[varBase];
+      else if(varBase){ // single-variant product: treat the collapsed values as one variant
+        const e=row[varBase+"@"+varAttr];
+        if(e!==undefined)variants=[{[varAttr]:e,uid:row[varBase+"@uid"]||"",_text:row[varBase]||""}];
+      }
+      let pValid=0,pAny=0;
+      if(variants){
+        variants.forEach(v=>{
+          pAny++;variantsTotal++;
+          const e=String(v[varAttr]||"").trim();
+          const dig=e.replace(/\D/g,"");
+          let state=e===""?"empty":([8,12,13,14].includes(dig.length)?"valid":"junk");
+          const uid=v.uid||v.option||"";const size=v._text||"";
+          if(allVariants.length<VARCAP)allVariants.push({id:rowId,uid,size,ean:e,state});
+          if(state==="valid"){eanValidCount++;pValid++;}
+          else{
+            if(state==="empty")eanEmptyCount++;else eanJunkCount++;
+            if(variantGaps.length<200000)variantGaps.push({id:rowId,name:String(out.name||""),uid,size,ean:e,state});
+          }
+        });
+      }
+      if(pAny===0){
+        // EAN column is mapped but this product has no variant data at all
+        const ean=String(out.ean).trim();
+        if(!ean){add("ean","block","missing");rowBlock=true;for(const h of DATA.headers){if(h!==MAP.ean&&eanLike(row[h])){eanElsewhere[h]=(eanElsewhere[h]||0)+1;break;}}}
+        else if(!eanValid(ean)){add("ean","block","invalid: "+ean);rowBlock=true;}
+      }else if(pValid===0){
+        add("ean","block","no valid EAN on any of "+pAny+" variants");rowBlock=true;
+      }
     }
 
     if(!unmapped("price")){
@@ -606,10 +667,11 @@ function inspect(){
     notices.push({tier:"confirm",field:"ean",msg:eanCols[0][1]+" rows with no EAN in the mapped column have a valid barcode in “"+eanCols[0][0]+"”, consider remapping EAN to it"});
   }
 
-  REPORT={clean,exc,notices,counts:{
+  REPORT={clean,exc,notices,variantGaps,allVariants,counts:{
     total:DATA.rows.length,blockRows,confirmRows,okRows,
     weightMapped:!unmapped("weight_kg"),weightMissing,
-    brandMapped:!unmapped("brand"),brandMissing,brandSuggested
+    brandMapped:!unmapped("brand"),brandMissing,brandSuggested,
+    eanVariantMode:variantsTotal>0,variantsTotal,eanValidCount,eanEmptyCount,eanJunkCount
   }};
 }
 
@@ -640,9 +702,16 @@ function renderReport(){
     const p=pct(miss);const cls=p>=98?"good":p>=85?"warn":"bad";
     return `<div class="hero ${cls}"><div class="hl">${label} completeness</div><div class="hv">${p}<span>%</span></div><div class="hs">${miss.toLocaleString()} of ${c.total.toLocaleString()} missing${extra||""}</div></div>`;
   };
+  const eanHero=(c)=>{
+    const t=c.variantsTotal||0;const p=t?Math.round(c.eanValidCount/t*100):0;
+    const cls=p>=98?"good":p>=85?"warn":"bad";
+    const gaps=(c.eanEmptyCount+c.eanJunkCount);
+    return `<div class="hero ${cls}"><div class="hl">EAN completeness · per variant</div><div class="hv">${p}<span>%</span></div><div class="hs">${gaps.toLocaleString()} of ${t.toLocaleString()} variants need a code (${c.eanEmptyCount.toLocaleString()} empty · ${c.eanJunkCount.toLocaleString()} junk)</div></div>`;
+  };
   $("#heroes").innerHTML=
     heroCard("Weight",c.weightMapped,c.weightMissing,"")+
-    heroCard("Brand",c.brandMapped,c.brandMissing,c.brandSuggested?(" · "+c.brandSuggested.toLocaleString()+" suggestible from name"):"");
+    heroCard("Brand",c.brandMapped,c.brandMissing,c.brandSuggested?(" · "+c.brandSuggested.toLocaleString()+" suggestible from name"):"")+
+    (c.eanVariantMode?eanHero(c):heroCard("EAN",false,0,""));
   $("#summary").innerHTML=`
     <div class="chip"><b>${c.total.toLocaleString()}</b>rows read</div>
     <div class="chip block"><b>${c.blockRows.toLocaleString()}</b>blocked · critical gap</div>
@@ -679,9 +748,25 @@ function renderReport(){
       tb.appendChild(tr);
     }
   }
+  // variant-level EAN gaps
+  const vb=$("#variantBlock");const gaps=REPORT.variantGaps||[];
+  if(c.eanVariantMode&&gaps.length){
+    vb.hidden=false;
+    const vt=$("#variantT tbody");vt.innerHTML="";
+    const order={junk:0,empty:1};const VCAP=500;
+    const sg=gaps.slice().sort((a,b)=>(order[a.state]-order[b.state]));
+    const vf=document.createDocumentFragment();
+    sg.slice(0,VCAP).forEach(x=>{
+      const tier=x.state==="junk"?"block":"confirm";
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td class="id">${esc(x.id)}</td><td>${esc(x.name)}</td><td class="id">${esc(x.uid)}</td><td>${esc(x.size)}</td><td class="field">${esc(x.ean||"(empty)")}</td><td><span class="pill ${tier}">${esc(x.state)}</span></td>`;
+      vf.appendChild(tr);
+    });
+    vt.appendChild(vf);
+    if(sg.length>VCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="6" class="empty">Showing first ${VCAP} of ${sg.length.toLocaleString()} variant gaps. Download the CSV for the full list.</td>`;vt.appendChild(tr);}
+  }else{vb.hidden=true;}
   $("#s3sub").textContent=c.total+" rows inspected";
 }
-function esc(s){return String(s===undefined?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 
 /* ---------- exports ---------- */
 function toCSV(headers,rows){
@@ -703,6 +788,18 @@ function exportExc(){
   const notices=(REPORT.notices||[]).map(n=>({rowId:"(feed-level)",field:n.field,tier:n.tier,found:n.msg,suggested:""}));
   const rows=notices.concat(REPORT.exc.map(x=>({rowId:x.rowId,field:x.field,tier:x.tier,found:x.found,suggested:x.sugg})));
   download("exceptions-report.csv",toCSV(["rowId","field","tier","found","suggested"],rows));
+}
+function exportVariantGaps(){
+  const g=REPORT.variantGaps||[];
+  if(!g.length){return;}
+  download("ean-gaps-by-variant.csv",toCSV(["product_id","product_name","variant_uid","size","ean","state"],
+    g.map(x=>({product_id:x.id,product_name:x.name,variant_uid:x.uid,size:x.size,ean:x.ean,state:x.state}))));
+}
+function exportVariantsAll(){
+  const a=REPORT.allVariants||[];
+  if(!a.length){return;}
+  download("all-variants.csv",toCSV(["product_id","variant_uid","size","ean","state"],
+    a.map(x=>({product_id:x.id,variant_uid:x.uid,size:x.size,ean:x.ean,state:x.state}))));
 }
 
 /* ---------- flow ---------- */
@@ -771,6 +868,8 @@ $("#loadProfile").addEventListener("click",async()=>{
 
 $("#dlClean").addEventListener("click",exportClean);
 $("#dlExc").addEventListener("click",exportExc);
+$("#dlVarGaps").addEventListener("click",exportVariantGaps);
+$("#dlVarAll").addEventListener("click",exportVariantsAll);
 $("#restart").addEventListener("click",()=>{DATA={headers:[],rows:[]};MAP={};REPORT=null;hide("#s2");hide("#s3");$("#file").value="";$("#s1sub").textContent="XML · CSV · XLSX";window.scrollTo({top:0,behavior:"smooth"});});
 </script>
 </body>
