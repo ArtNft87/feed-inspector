@@ -347,43 +347,68 @@ function parseXLSX(buf){
   return {headers,rows:objs};
 }
 
+// attribute names that mark a name/value pair list (e.g. <a name="Waga">2.5</a>)
+const NAME_ATTRS=["name","nazwa","key","klucz","id","code","kod","attribute","atrybut","param","typ","type"];
+const VALUE_ATTRS=["value","wartosc","wartość","val","v"];
+
+function flattenRecord(node,o,prefix){
+  prefix=prefix||"";
+  for(const a of (node.attributes||[])) o[prefix+"@"+a.name]=String(a.value).trim();
+  const byTag={};
+  for(const ch of node.children){(byTag[ch.tagName]=byTag[ch.tagName]||[]).push(ch);}
+  for(const tag in byTag){
+    const group=byTag[tag];
+    // name/value pivot: repeated siblings each carrying a name-ish attribute -> own columns
+    const pivotable = group.length>1 && group.every(ch=>[...ch.attributes].some(a=>NAME_ATTRS.includes(a.name.toLowerCase())));
+    if(pivotable){
+      group.forEach(ch=>{
+        const nameAttr=[...ch.attributes].find(a=>NAME_ATTRS.includes(a.name.toLowerCase()));
+        const valAttr=[...ch.attributes].find(a=>VALUE_ATTRS.includes(a.name.toLowerCase()));
+        const key=(prefix?prefix+"/":"")+String(nameAttr.value).trim();
+        const val=valAttr?valAttr.value:ch.textContent;
+        o[key]=String(val).trim();
+      });
+      continue;
+    }
+    group.forEach((ch,i)=>{
+      const base=(prefix?prefix+"/":"")+tag+(group.length>1?("#"+(i+1)):"");
+      if(ch.children.length){ flattenRecord(ch,o,base); }
+      else{
+        for(const a of ch.attributes) o[base+"@"+a.name]=String(a.value).trim();
+        o[base]=ch.textContent.trim();
+      }
+    });
+  }
+}
+
 function parseXML(text){
-  const doc=new DOMParser().parseFromString(text,"text/xml");
-  if(doc.querySelector("parsererror"))throw new Error("This file is not valid XML.");
-  // find the repeating product node: the element name that occurs most often and has children/attrs
+  const doc=new DOMParser().parseFromString(text,"application/xml");
+  const perr=doc.getElementsByTagName("parsererror");
+  if(perr&&perr.length)throw new Error("This file is not valid XML.");
+  // count element repetitions
   const counts={};
-  doc.querySelectorAll("*").forEach(el=>{
-    const hasContent=el.children.length>0||el.attributes.length>0;
-    if(hasContent)counts[el.tagName]=(counts[el.tagName]||0)+1;
-  });
-  let best=null,bestN=0;
-  for(const tag in counts){ if(counts[tag]>bestN&&counts[tag]>1){best=tag;bestN=counts[tag];} }
-  if(!best)throw new Error("Could not find repeating product records in this XML.");
+  for(const el of doc.getElementsByTagName("*")) counts[el.tagName]=(counts[el.tagName]||0)+1;
+  const candidates=Object.keys(counts).filter(t=>counts[t]>1);
+  if(!candidates.length)throw new Error("Could not find repeating product records in this XML.");
+  // pick the record node: the one that yields the most fields, weighted by how often it repeats
+  let best=null,bestScore=-1;
+  for(const tag of candidates){
+    const f={};flattenRecord(doc.getElementsByTagName(tag)[0],f);
+    const nf=Object.keys(f).length;
+    const score=nf*Math.log10(counts[tag]+1);
+    if(nf>=2&&score>bestScore){bestScore=score;best=tag;}
+  }
+  if(!best){let n=0;for(const t of candidates){if(counts[t]>n){n=counts[t];best=t;}}}
   const nodes=[...doc.getElementsByTagName(best)];
   const headerSet=new Set();
-  const records=nodes.map(node=>{
-    const o={};
-    // attributes on the product node
-    for(const a of node.attributes){const k="@"+a.name;o[k]=a.value.trim();headerSet.add(k);}
-    // direct children, flattened one level (path keys for nesting)
-    const walk=(el,prefix)=>{
-      for(const ch of el.children){
-        const key=prefix?prefix+"/"+ch.tagName:ch.tagName;
-        for(const a of ch.attributes){const ak=key+"@"+a.name;o[ak]=a.value.trim();headerSet.add(ak);}
-        if(ch.children.length){ walk(ch,key); }
-        else { const t=ch.textContent.trim(); if(t!==""||!(key in o)){o[key]=t;headerSet.add(key);} }
-      }
-    };
-    walk(node,"");
-    return o;
-  });
+  const records=nodes.map(node=>{const o={};flattenRecord(node,o);Object.keys(o).forEach(k=>headerSet.add(k));return o;});
   return {headers:[...headerSet],rows:records};
 }
 
 /* ---------- auto mapping ---------- */
 function autoMap(headers){
   const m={};const used=new Set();
-  const normHeaders=headers.map(h=>({raw:h,n:norm(h.replace(/^@/,"").split("/").pop())}));
+  const normHeaders=headers.map(h=>({raw:h,n:norm(h.split(/[\/@]/).pop())}));
   for(const f of FIELDS){
     let pick="",score=-1;
     for(const h of normHeaders){
