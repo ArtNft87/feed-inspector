@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Feed Inspector — supplier file normalizer</title>
+<title>Feed Inspector, supplier file normalizer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
@@ -18,7 +18,7 @@
     /* brand accent: stamp ink blue, used only for primary actions + wordmark */
     --accent:#1f3a5f;
     --accent-ink:#fbf8f1;
-    /* status palette — reserved strictly for validation flags, never decoration */
+    /* status palette, reserved strictly for validation flags, never decoration */
     --block:#9c2b1e;     /* hard / critical */
     --block-bg:#f4ddd8;
     --confirm:#9a6310;   /* estimate, needs confirmation */
@@ -65,7 +65,7 @@
     padding:6px 10px;border-radius:3px;transform:rotate(-3deg);white-space:nowrap;
   }
 
-  /* numbered steps — real sequence, so numbering earns its place */
+  /* numbered steps, real sequence, so numbering earns its place */
   .step{margin-top:26px;border:1px solid var(--line);background:var(--card)}
   .step-h{
     display:flex;align-items:center;gap:12px;
@@ -128,6 +128,11 @@
 
   /* report */
   .summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  .notices{border:1px solid var(--line);background:var(--card);padding:12px 14px;margin-bottom:18px}
+  .notices-h{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-soft);text-transform:uppercase;margin-bottom:8px}
+  .notice{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
+  .notice:first-of-type{border-top:none}
+  .notice .pill{flex:0 0 auto;margin-top:1px}
   .chip{
     font-family:var(--mono);font-size:12px;letter-spacing:.04em;
     padding:8px 12px;border-radius:3px;border:1px solid var(--line-strong);background:var(--card);
@@ -222,6 +227,8 @@
     <div class="step-b">
       <div class="summary" id="summary"></div>
 
+      <div class="notices" id="notices" hidden></div>
+
       <div class="opt"><input type="checkbox" id="optBlock" checked><label for="optBlock">Exclude rows with critical gaps from the clean file</label></div>
 
       <div class="actions" style="margin-top:6px;margin-bottom:18px">
@@ -236,7 +243,7 @@
           <tbody></tbody>
         </table>
       </div>
-      <div class="note">Tiers — <b>block</b>: critical gap, costs margin or breaks import. <b>confirm</b>: we can estimate, you decide. <b>soft</b>: optional or GPSR field presence only, no legal judgement made here. The responsible person at your business owns the compliance decision.</div>
+      <div class="note">Tiers, <b>block</b>: critical gap, costs margin or breaks import. <b>confirm</b>: we can estimate, you decide. <b>soft</b>: optional or GPSR field presence only, no legal judgement made here. The responsible person at your business owns the compliance decision.</div>
     </div>
   </section>
 
@@ -266,7 +273,7 @@ const FIELDS = [
 const GPSR_KEYS = ["gpsr_manufacturer","gpsr_responsible","gpsr_warnings"];
 const DIM_KEYS = ["length_cm","width_cm","height_cm"];
 
-/* weight estimate heuristic — only fires on a keyword match, never a blind guess */
+/* weight estimate heuristic, only fires on a keyword match, never a blind guess */
 const WEIGHT_HINTS = [
   {re:/(rower|bike|fahrrad|велос)/i,                          range:[8,18],  oversize:true},
   {re:/(biurko|desk|schreibtisch|stol|stół|table|tisch)/i,    range:[15,40], oversize:true},
@@ -277,6 +284,8 @@ const WEIGHT_HINTS = [
   {re:/(hantle|dumbbell|kettlebell|obciazenie|obciążenie|plate|sztanga|barbell)/i, range:[2,30], oversize:false},
   {re:/(opona|tire|tyre|reifen)/i,                            range:[1,4],   oversize:false},
 ];
+// weight at or above this means dimensions are needed for accurate carrier pricing
+const OVERSIZE_KG = 15;
 
 /* ---------- storage wrapper: artifact window.storage, else localStorage, else memory ---------- */
 const mem={};
@@ -476,8 +485,24 @@ function estimateWeight(name,cat){
 /* ---------- validation engine ---------- */
 function inspect(){
   const get=(row,key)=>{const src=MAP[key];return src?row[src]:undefined;};
-  const clean=[];const exc=[];
+  const unmapped=k=>MAP[k]==="";
+  const dimsUnmapped=DIM_KEYS.every(unmapped);
+  const clean=[];const exc=[];const notices=[];
   let blockRows=0,confirmRows=0,okRows=0;
+
+  // Feed-level notices for fields that simply are not in the file. One line each,
+  // instead of repeating the same flag on every one of 25k rows.
+  FIELDS.forEach(f=>{
+    if(DIM_KEYS.includes(f.key)||GPSR_KEYS.includes(f.key))return;
+    if(unmapped(f.key))notices.push({tier:f.req?"block":"soft",field:f.key,msg:f.label+" not mapped to any column, affects all "+DATA.rows.length+" rows"});
+  });
+  if(dimsUnmapped)notices.push({tier:"block",field:"dimensions",msg:"No dimension columns (length / width / height) in this feed, all "+DATA.rows.length+" rows ship without size data"});
+  GPSR_KEYS.forEach(k=>{if(unmapped(k))notices.push({tier:"soft",field:k,msg:k.replace("gpsr_","GPSR ")+" not present in this feed"});});
+
+  // EAN-elsewhere detector: if the mapped EAN is empty, look for a barcode hiding in another column
+  const onlyDigits=v=>String(v||"").trim().replace(/\s/g,"");
+  const eanLike=v=>{const s=onlyDigits(v);return /^\d+$/.test(s)&&[8,12,13,14].includes(s.length);};
+  const eanElsewhere={};
 
   DATA.rows.forEach((row,idx)=>{
     const rowId=get(row,"sku")||get(row,"ean")||("row "+(idx+1));
@@ -485,59 +510,76 @@ function inspect(){
     let rowBlock=false,rowConfirm=false;
     const add=(field,tier,found,sugg)=>{exc.push({rowId,field,tier,found,sugg:sugg||""});};
 
-    // required core
-    if(!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
-    if(!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
+    if(!unmapped("sku")&&!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
+    if(!unmapped("name")&&!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
 
-    // ean
-    const ean=String(out.ean).trim();
-    if(!ean){add("ean","block","missing");rowBlock=true;}
-    else if(!eanValid(ean)){add("ean","block","invalid length: "+ean.replace(/\D/g,"").length+" digits");rowBlock=true;}
-
-    // price + currency
-    const price=num(out.price);
-    if(price===null){add("price","block","missing or non-numeric");rowBlock=true;}
-    else if(price<=0){add("price","block","not positive: "+price);rowBlock=true;}
-    if(!String(out.currency).trim()){add("currency","soft","missing");}
-
-    // weight — the margin protector
-    const w=num(out.weight_kg);
-    if(w===null||w<=0){
-      const est=estimateWeight(out.name,out.category);
-      if(est){add("weight_kg","confirm","missing",est.range[0]+"–"+est.range[1]+" kg"+(est.oversize?" · likely oversize":""));rowConfirm=true;}
-      else{add("weight_kg","block","missing, no reliable estimate");rowBlock=true;}
+    if(!unmapped("ean")){
+      const ean=String(out.ean).trim();
+      if(!ean){
+        add("ean","block","missing");rowBlock=true;
+        for(const h of DATA.headers){ if(h!==MAP.ean&&eanLike(row[h])){eanElsewhere[h]=(eanElsewhere[h]||0)+1;break;} }
+      }else if(!eanValid(ean)){add("ean","block","invalid length: "+ean.replace(/\D/g,"").length+" digits");rowBlock=true;}
     }
 
-    // dimensions
-    const dims=DIM_KEYS.map(k=>num(out[k]));
-    const missingDims=DIM_KEYS.filter((k,i)=>dims[i]===null||dims[i]<=0);
-    if(missingDims.length){
-      const est=estimateWeight(out.name,out.category);
-      if(est&&est.oversize){add("dimensions","confirm","missing: "+missingDims.map(k=>k.replace("_cm","")).join(", "),"likely oversize, dimensions required");rowConfirm=true;}
-      else{add("dimensions","block","missing: "+missingDims.map(k=>k.replace("_cm","")).join(", "));rowBlock=true;}
-    }else{
-      const maxDim=Math.max(...dims);
-      if(maxDim>120){add("dimensions","soft","oversize: "+maxDim+" cm","check carrier surcharge");}
+    if(!unmapped("price")){
+      const price=num(out.price);
+      if(price===null){add("price","block","missing or non-numeric");rowBlock=true;}
+      else if(price<=0){add("price","block","not positive: "+price);rowBlock=true;}
     }
 
-    // gpsr — presence only, no legal interpretation
-    GPSR_KEYS.forEach(k=>{
-      if(MAP[k]===""||!String(out[k]).trim()){
-        add(k,"soft","GPSR field not present");
+    let w=null;
+    if(!unmapped("weight_kg")){
+      w=num(out.weight_kg);
+      if(w===null||w<=0){
+        const est=estimateWeight(out.name,out.category);
+        if(est){add("weight_kg","confirm","missing",est.range[0]+"-"+est.range[1]+" kg"+(est.oversize?" · likely oversize":""));rowConfirm=true;}
+        else{add("weight_kg","block","missing, no reliable estimate");rowBlock=true;}
+        w=null;
       }
-    });
+    }
+
+    // Dimensions. When dims are missing we only raise a per-row flag for the items
+    // where it actually costs money: heavy items (by real weight). The name keyword
+    // is only a fallback when weight is unknown, a known light weight overrides it.
+    const weightKnown=(w!==null);
+    const heavy=(weightKnown&&w>=OVERSIZE_KG);
+    const est=estimateWeight(out.name,out.category);
+    const oversizeByName=(!weightKnown&&est&&est.oversize);
+    if(dimsUnmapped){
+      if(heavy){add("dimensions","confirm","no dimensions; weight "+w+" kg","heavy item, dimensions required for carrier pricing");rowConfirm=true;}
+      else if(oversizeByName){add("dimensions","confirm","no dimensions","likely oversize ("+est.range.join("-")+" kg), dimensions required");rowConfirm=true;}
+    }else{
+      const dims=DIM_KEYS.map(k=>unmapped(k)?null:num(out[k]));
+      const missing=DIM_KEYS.filter((k,i)=>!unmapped(k)&&(dims[i]===null||dims[i]<=0));
+      if(missing.length){
+        if(heavy||oversizeByName){add("dimensions","confirm","missing: "+missing.map(k=>k.replace("_cm","")).join(", "),(heavy?"heavy "+w+" kg, ":"")+"dimensions required");rowConfirm=true;}
+        else{add("dimensions","block","missing: "+missing.map(k=>k.replace("_cm","")).join(", "));rowBlock=true;}
+      }else{
+        const present=dims.filter(d=>d!==null);const maxDim=present.length?Math.max(...present):0;
+        if(maxDim>120){add("dimensions","soft","oversize: "+maxDim+" cm","check carrier surcharge");}
+      }
+    }
+
+    // GPSR: per-row flag only when the column exists but is empty (a real gap)
+    GPSR_KEYS.forEach(k=>{ if(!unmapped(k)&&!String(out[k]).trim())add(k,"soft","present in feed but empty"); });
 
     if(rowBlock)blockRows++;else if(rowConfirm)confirmRows++;else okRows++;
     clean.push({out,rowBlock,rowConfirm});
   });
 
-  REPORT={clean,exc,counts:{total:DATA.rows.length,blockRows,confirmRows,okRows}};
+  // surface the best alternative EAN column, if one consistently holds a barcode
+  const eanCols=Object.entries(eanElsewhere).sort((a,b)=>b[1]-a[1]);
+  if(eanCols.length&&eanCols[0][1]>=Math.max(10,Math.floor(DATA.rows.length*0.02))){
+    notices.push({tier:"confirm",field:"ean",msg:eanCols[0][1]+" rows with no EAN in the mapped column have a valid barcode in “"+eanCols[0][0]+"”, consider remapping EAN to it"});
+  }
+
+  REPORT={clean,exc,notices,counts:{total:DATA.rows.length,blockRows,confirmRows,okRows}};
 }
 
 /* ---------- rendering ---------- */
 function renderMap(){
   const tb=$("#mapT tbody");tb.innerHTML="";
-  const opts=h=>`<option value="">— not in file —</option>`+DATA.headers.map(x=>`<option value="${esc(x)}"${MAP[h.key]===x?" selected":""}>${esc(x)}</option>`).join("");
+  const opts=h=>`<option value="">(not in file)</option>`+DATA.headers.map(x=>`<option value="${esc(x)}"${MAP[h.key]===x?" selected":""}>${esc(x)}</option>`).join("");
   FIELDS.forEach(f=>{
     const tr=document.createElement("tr");
     const hit=MAP[f.key]!=="";
@@ -560,20 +602,36 @@ function renderReport(){
     <div class="chip block"><b>${c.blockRows}</b>blocked · critical gap</div>
     <div class="chip confirm"><b>${c.confirmRows}</b>need confirm</div>
     <div class="chip ok"><b>${c.okRows}</b>clean</div>
-    <div class="chip"><b>${REPORT.exc.length}</b>total flags</div>`;
+    <div class="chip"><b>${REPORT.exc.length}</b>row flags</div>`;
+  // feed-level notices first, these are the headline findings about the whole feed
+  const nb=$("#notices");
+  if(REPORT.notices&&REPORT.notices.length){
+    nb.hidden=false;
+    nb.innerHTML=`<div class="notices-h">Feed-level findings</div>`+REPORT.notices.map(n=>
+      `<div class="notice ${n.tier}"><span class="pill ${n.tier}">${n.tier}</span><span>${esc(n.msg)}</span></div>`).join("");
+  }else{nb.hidden=true;nb.innerHTML="";}
   const tb=$("#ledgerT tbody");tb.innerHTML="";
-  if(!REPORT.exc.length){tb.innerHTML=`<tr><td colspan="5" class="empty">No gaps found. This feed is clean.</td></tr>`;}
+  if(!REPORT.exc.length){tb.innerHTML=`<tr><td colspan="5" class="empty">No row-level gaps in the mapped fields.</td></tr>`;}
   else{
     const order={block:0,confirm:1,soft:2};
-    REPORT.exc.slice().sort((a,b)=>order[a.tier]-order[b.tier]).forEach(x=>{
+    const CAP=500;
+    const sorted=REPORT.exc.slice().sort((a,b)=>order[a.tier]-order[b.tier]);
+    const frag=document.createDocumentFragment();
+    sorted.slice(0,CAP).forEach(x=>{
       const tr=document.createElement("tr");
       tr.innerHTML=`<td class="id">${esc(x.rowId)}</td>
         <td class="field">${esc(x.field)}</td>
         <td><span class="pill ${x.tier}">${x.tier}</span></td>
         <td>${esc(x.found)}</td>
         <td class="sugg">${esc(x.sugg)}</td>`;
-      tb.appendChild(tr);
+      frag.appendChild(tr);
     });
+    tb.appendChild(frag);
+    if(sorted.length>CAP){
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td colspan="5" class="empty">Showing first ${CAP} of ${sorted.length} row flags. Download the exceptions report for the full list.</td>`;
+      tb.appendChild(tr);
+    }
   }
   $("#s3sub").textContent=c.total+" rows inspected";
 }
@@ -596,8 +654,9 @@ function exportClean(){
   download("clean-feed.csv",toCSV(heads,rows));
 }
 function exportExc(){
-  download("exceptions-report.csv",toCSV(["rowId","field","tier","found","suggested"],
-    REPORT.exc.map(x=>({rowId:x.rowId,field:x.field,tier:x.tier,found:x.found,suggested:x.sugg}))));
+  const notices=(REPORT.notices||[]).map(n=>({rowId:"(feed-level)",field:n.field,tier:n.tier,found:n.msg,suggested:""}));
+  const rows=notices.concat(REPORT.exc.map(x=>({rowId:x.rowId,field:x.field,tier:x.tier,found:x.found,suggested:x.sugg})));
+  download("exceptions-report.csv",toCSV(["rowId","field","tier","found","suggested"],rows));
 }
 
 /* ---------- flow ---------- */
@@ -639,7 +698,7 @@ $("#fetchBtn").addEventListener("click",async()=>{
     const res=await fetch(u);if(!res.ok)throw new Error("Fetch failed: "+res.status);
     const kind=u.toLowerCase().endsWith(".xml")?"xml":(u.toLowerCase().endsWith(".xlsx")||u.toLowerCase().endsWith(".xls"))?"xlsx":"csv";
     if(kind==="xlsx")ingest(u,await res.arrayBuffer(),"xlsx");else ingest(u,await res.text(),kind);
-  }catch(err){setErr((err.message||err)+" — most direct file URLs block cross-origin fetch. Download the file and drop it above instead.");}
+  }catch(err){setErr((err.message||err)+", most direct file URLs block cross-origin fetch. Download the file and drop it above instead.");}
 });
 
 $("#runBtn").addEventListener("click",()=>{
