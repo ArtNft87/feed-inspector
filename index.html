@@ -419,8 +419,13 @@ function autoMap(headers){
   const m={};const used=new Set();
   // precompute per-header tokens + normalized leaf
   const H=headers.map(raw=>{const leaf=leafSeg(raw);return {raw,leafN:norm(leaf),toks:new Set(wordTokens(leaf)),d:depth(raw),len:raw.length};});
-  // precompute per-field synonym tokens + normalized forms
-  const syns=FIELDS.map(f=>({key:f.key,norms:f.syn.map(norm),toks:new Set([].concat(...f.syn.map(wordTokens)))}));
+  // precompute per-field synonym tokens + normalized forms.
+  // Generic words that show up across many fields must not, on their own, drive a
+  // match (e.g. "name" out of brand_name was grabbing attr@name; "info" out of
+  // manufacturer_info was grabbing safety_info). Whole-phrase exact matches are
+  // unaffected, so a column literally named "brand_name" still resolves correctly.
+  const GENERIC=new Set(["name","info","address","adres","data","dane","value","val","type","contact","code","number","item","product","attr","attribute","field","label","title","desc","description","required","std","default","main","general","other","extra","unit"]);
+  const syns=FIELDS.map(f=>({key:f.key,norms:f.syn.map(norm),toks:new Set([].concat(...f.syn.map(wordTokens)).filter(t=>!GENERIC.has(t)))}));
 
   for(const fs of syns){
     let top=-1;const cands=[];
@@ -433,13 +438,17 @@ function autoMap(headers){
       else if(s===top&&s>0)cands.push(h);
     }
     if(top<2){m[fs.key]="";continue;}
-    // prefer the shallowest matches (a top-level field beats a nested one)
+    if(top>=3){
+      // multiple exact-synonym hits = same meaning across duplicate columns -> shallowest, then first
+      cands.sort((a,b)=>a.d-b.d||a.raw.localeCompare(b.raw));
+      m[fs.key]=cands[0].raw;used.add(cands[0].raw);continue;
+    }
+    // top===2: weaker word-level hits. Guard against ties that may mean different things.
     const minD=Math.min(...cands.map(c=>c.d));
     const atMin=cands.filter(c=>c.d===minD);
-    // signature = the meaningful word tokens of the whole path, numeric indexes dropped
     const sig=h=>[...new Set(wordTokens(h.raw).filter(t=>!/^\d+$/.test(t)))].sort().join("|");
     const sigs=new Set(atMin.map(sig));
-    if(sigs.size>1){m[fs.key]="";}                                       // different meanings tie (e.g. retail vs wholesale) -> human picks
+    if(sigs.size>1){m[fs.key]="";}                                       // e.g. retail vs wholesale -> human picks
     else{atMin.sort((a,b)=>a.raw.localeCompare(b.raw));m[fs.key]=atMin[0].raw;used.add(atMin[0].raw);}
   }
   return m;
