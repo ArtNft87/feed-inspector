@@ -202,10 +202,10 @@
       </div>
       <input type="file" id="file" accept=".xml,.csv,.xlsx,.xls,text/xml,text/csv" hidden>
       <div class="row-inline">
-        <input type="text" id="url" placeholder="…or paste a direct file URL (CORS permitting)">
+        <input type="text" id="url" aria-label="Direct file URL" placeholder="…or paste a direct file URL (CORS permitting)">
         <button class="ghost" id="fetchBtn">Fetch URL</button>
       </div>
-      <div class="err" id="s1err" hidden></div>
+      <div class="err" id="s1err" role="alert" aria-live="polite" hidden></div>
     </div>
   </section>
 
@@ -214,7 +214,7 @@
     <div class="step-h"><span class="num">2</span><h2>Confirm column mapping</h2><span class="sub" id="s2sub"></span></div>
     <div class="step-b">
       <div class="row-inline">
-        <input type="text" id="supplier" placeholder="Supplier name (saves this mapping for next time)">
+        <input type="text" id="supplier" aria-label="Supplier name" placeholder="Supplier name (saves this mapping for next time)">
         <button class="ghost" id="loadProfile">Load saved mapping</button>
         <button class="ghost" id="saveProfile">Save mapping</button>
       </div>
@@ -226,8 +226,10 @@
       </div>
       <div class="actions">
         <button id="runBtn">Inspect feed</button>
+        <span class="auto" id="progress" hidden></span>
         <span class="auto" id="profMsg"></span>
       </div>
+      <div class="err" id="runWarn" role="alert" aria-live="polite" hidden></div>
       <div class="note">Required fields are marked <span class="req">*</span>. Estimated values are never written into the clean file silently. They appear only in the exceptions report, labelled "confirm", for a person to accept.</div>
     </div>
   </section>
@@ -237,7 +239,7 @@
     <div class="step-h"><span class="num">3</span><h2>Inspection report</h2><span class="sub" id="s3sub"></span></div>
     <div class="step-b">
       <div class="heroes" id="heroes"></div>
-      <div class="summary" id="summary"></div>
+      <div class="summary" id="summary" aria-live="polite"></div>
 
       <div class="notices" id="notices" hidden></div>
 
@@ -332,6 +334,7 @@ const store={
 /* ---------- state ---------- */
 let DATA={headers:[],rows:[]};   // parsed source
 let MAP={};                      // canonicalKey -> sourceHeader ("" = unmapped)
+let MAPINFO={};                  // canonicalKey -> "exact" | "token" | "ambiguous" | ""
 let REPORT=null;                 // {clean, exceptions, counts}
 
 /* ---------- helpers ---------- */
@@ -343,6 +346,7 @@ function setErr(msg){const e=$("#s1err");if(!msg){e.hidden=true;return}e.hidden=
 
 /* ---------- parsers ---------- */
 function parseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);   // strip UTF-8 BOM
   // delimiter sniff
   const head=text.slice(0,4000);
   const delim=[";","\t","|",","].sort((a,b)=>(head.split(b).length-head.split(a).length))[0]||",";
@@ -463,7 +467,7 @@ function leafSeg(h){const p=h.split(/[\/@#]/).filter(s=>s&&!/^\d+$/.test(s));ret
 function depth(h){return h.split(/[\/@#]/).filter(Boolean).length;}
 
 function autoMap(headers){
-  const m={};const used=new Set();
+  const m={};const used=new Set();MAPINFO={};
   // precompute per-header tokens + normalized leaf
   const H=headers.map(raw=>{const leaf=leafSeg(raw);return {raw,leafN:norm(leaf),toks:new Set(wordTokens(leaf)),d:depth(raw),len:raw.length};});
   // precompute per-field synonym tokens + normalized forms.
@@ -484,19 +488,19 @@ function autoMap(headers){
       if(s>top){top=s;cands.length=0;cands.push(h);}
       else if(s===top&&s>0)cands.push(h);
     }
-    if(top<2){m[fs.key]="";continue;}
+    if(top<2){m[fs.key]="";MAPINFO[fs.key]="";continue;}
     if(top>=3){
       // multiple exact-synonym hits = same meaning across duplicate columns -> shallowest, then first
       cands.sort((a,b)=>a.d-b.d||a.raw.localeCompare(b.raw));
-      m[fs.key]=cands[0].raw;used.add(cands[0].raw);continue;
+      m[fs.key]=cands[0].raw;used.add(cands[0].raw);MAPINFO[fs.key]="exact";continue;
     }
     // top===2: weaker word-level hits. Guard against ties that may mean different things.
     const minD=Math.min(...cands.map(c=>c.d));
     const atMin=cands.filter(c=>c.d===minD);
     const sig=h=>[...new Set(wordTokens(h.raw).filter(t=>!/^\d+$/.test(t)))].sort().join("|");
     const sigs=new Set(atMin.map(sig));
-    if(sigs.size>1){m[fs.key]="";}                                       // e.g. retail vs wholesale -> human picks
-    else{atMin.sort((a,b)=>a.raw.localeCompare(b.raw));m[fs.key]=atMin[0].raw;used.add(atMin[0].raw);}
+    if(sigs.size>1){m[fs.key]="";MAPINFO[fs.key]="ambiguous";}              // e.g. retail vs wholesale -> human picks
+    else{atMin.sort((a,b)=>a.raw.localeCompare(b.raw));m[fs.key]=atMin[0].raw;used.add(atMin[0].raw);MAPINFO[fs.key]="token";}
   }
   return m;
 }
@@ -505,14 +509,27 @@ function autoMap(headers){
 function num(v){
   if(v===undefined||v===null)return null;
   let s=String(v).trim();if(s==="")return null;
-  s=s.replace(/[^\d,.\-]/g,"");
-  if(s.indexOf(",")>-1&&s.indexOf(".")>-1)s=s.replace(/\./g,"").replace(",",".");
-  else if(s.indexOf(",")>-1)s=s.replace(",",".");
+  s=s.replace(/[\s\u00a0']/g,"");       // strip spaces, non-breaking spaces, apostrophe thousands
+  s=s.replace(/[^0-9,.\-]/g,"");
+  if(s===""||s==="-")return null;
+  const lc=s.lastIndexOf(","),ld=s.lastIndexOf(".");
+  if(lc>-1&&ld>-1){                      // both present: the rightmost is the decimal mark
+    if(lc>ld)s=s.replace(/\./g,"").replace(",",".");
+    else s=s.replace(/,/g,"");
+  }else if(lc>-1){                       // only comma: treat as decimal
+    s=s.replace(",",".");
+  }
   const n=parseFloat(s);return isNaN(n)?null:n;
 }
 function eanValid(v){
   const s=String(v||"").replace(/\D/g,"");
-  return [8,12,13,14].includes(s.length);
+  if(![8,12,13,14].includes(s.length))return false;
+  // GS1 check digit: from the rightmost data digit, weights alternate 3,1,3,1...
+  const d=s.split("").map(Number);
+  const check=d.pop();
+  let sum=0,w=3;
+  for(let i=d.length-1;i>=0;i--){sum+=d[i]*w;w=(w===3?1:3);}
+  return ((10-(sum%10))%10)===check;
 }
 function estimateWeight(name,cat){
   const hay=((name||"")+" "+(cat||"")).toLowerCase();
@@ -521,7 +538,7 @@ function estimateWeight(name,cat){
 }
 
 /* ---------- validation engine ---------- */
-function inspect(){
+async function inspect(onProgress){
   const get=(row,key)=>{const src=MAP[key];return src?row[src]:undefined;};
   const unmapped=k=>MAP[k]==="";
   const dimsUnmapped=DIM_KEYS.every(unmapped);
@@ -558,11 +575,13 @@ function inspect(){
   }
 
   // EAN-elsewhere detector: if the mapped EAN is empty, look for a barcode hiding in another column
-  const onlyDigits=v=>String(v||"").trim().replace(/\s/g,"");
-  const eanLike=v=>{const s=onlyDigits(v);return /^\d+$/.test(s)&&[8,12,13,14].includes(s.length);};
+  const eanLike=v=>eanValid(v);
   const eanElsewhere={};
 
-  DATA.rows.forEach((row,idx)=>{
+  const N=DATA.rows.length;
+  for(let idx=0;idx<N;idx++){
+    const row=DATA.rows[idx];
+    if(idx%2000===0&&idx>0){ if(onProgress)onProgress(idx,N); await new Promise(r=>setTimeout(r)); }
     const rowId=get(row,"sku")||get(row,"ean")||("row "+(idx+1));
     const out={};FIELDS.forEach(f=>out[f.key]=get(row,f.key)!==undefined?get(row,f.key):"");
     let rowBlock=false,rowConfirm=false;
@@ -588,7 +607,7 @@ function inspect(){
           pAny++;variantsTotal++;
           const e=String(v[varAttr]||"").trim();
           const dig=e.replace(/\D/g,"");
-          let state=e===""?"empty":([8,12,13,14].includes(dig.length)?"valid":"junk");
+          let state=e===""?"empty":(eanValid(e)?"valid":"junk");
           const uid=v.uid||v.option||"";const size=v._text||"";
           if(allVariants.length<VARCAP)allVariants.push({id:rowId,uid,size,ean:e,state});
           if(state==="valid"){eanValidCount++;pValid++;}
@@ -659,7 +678,7 @@ function inspect(){
 
     if(rowBlock)blockRows++;else if(rowConfirm)confirmRows++;else okRows++;
     clean.push({out,rowBlock,rowConfirm});
-  });
+  }
 
   // surface the best alternative EAN column, if one consistently holds a barcode
   const eanCols=Object.entries(eanElsewhere).sort((a,b)=>b[1]-a[1]);
@@ -682,9 +701,11 @@ function renderMap(){
   FIELDS.forEach(f=>{
     const tr=document.createElement("tr");
     const hit=MAP[f.key]!=="";
+    const info=MAPINFO[f.key];
+    const label=hit?(info==="exact"?"exact match → ":(info==="token"?"word match → ":"matched → "))+esc(MAP[f.key]):(info==="ambiguous"?"ambiguous, pick manually":"no match");
     tr.innerHTML=`<td><code>${f.key}</code>${f.req?'<span class="req">*</span>':''}<br><span class="auto">${esc(f.label)}</span></td>
-      <td><select data-k="${f.key}">${opts(f)}</select></td>
-      <td><span class="auto ${hit?'hit':''}">${hit?'matched → '+esc(MAP[f.key]):'no match'}</span></td>`;
+      <td><select data-k="${f.key}" aria-label="Source column for ${esc(f.label)}">${opts(f)}</select></td>
+      <td><span class="auto ${hit?'hit':''}">${label}</span></td>`;
     tb.appendChild(tr);
   });
   tb.querySelectorAll("select").forEach(sel=>sel.addEventListener("change",e=>{
@@ -692,6 +713,7 @@ function renderMap(){
     const cell=e.target.closest("tr").querySelector(".auto.hit,.auto");
     cell.textContent=e.target.value?("set → "+e.target.value):"no match";
     cell.classList.toggle("hit",!!e.target.value);
+    inspectForced=false;$("#runBtn").textContent="Inspect feed";$("#runWarn").hidden=true;  // re-gate after edits
   }));
 }
 function renderReport(){
@@ -774,6 +796,8 @@ function toCSV(headers,rows){
   return [headers.map(q).join(";")].concat(rows.map(r=>headers.map(h=>q(r[h])).join(";"))).join("\r\n");
 }
 function download(name,csv){
+  const ds=new Date().toISOString().slice(0,10);
+  name=name.replace(/\.csv$/i,"-"+ds+".csv");
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1500);
@@ -836,6 +860,7 @@ $("#drop").addEventListener("drop",e=>{if(e.dataTransfer.files[0])readFile(e.dat
 
 $("#fetchBtn").addEventListener("click",async()=>{
   const u=$("#url").value.trim();if(!u)return;
+  if(!/^https?:\/\//i.test(u)){setErr("Only http and https URLs are allowed.");return;}
   setErr("");
   try{
     const res=await fetch(u);if(!res.ok)throw new Error("Fetch failed: "+res.status);
@@ -844,10 +869,27 @@ $("#fetchBtn").addEventListener("click",async()=>{
   }catch(err){setErr((err.message||err)+", most direct file URLs block cross-origin fetch. Download the file and drop it above instead.");}
 });
 
-$("#runBtn").addEventListener("click",()=>{
-  const missing=FIELDS.filter(f=>f.req&&MAP[f.key]==="").map(f=>f.key);
-  inspect();renderReport();show("#s3");
-  $("#s3").scrollIntoView({behavior:"smooth",block:"start"});
+let inspectForced=false;
+$("#runBtn").addEventListener("click",async()=>{
+  const missing=FIELDS.filter(f=>f.req&&MAP[f.key]==="");
+  if(missing.length&&!inspectForced){
+    const labels=missing.map(f=>f.label).join(", ");
+    $("#runWarn").hidden=false;
+    $("#runWarn").textContent="Required fields not mapped: "+labels+". Map them, or press the button again to inspect anyway.";
+    $("#runBtn").textContent="Inspect anyway";
+    inspectForced=true;
+    return;
+  }
+  const btn=$("#runBtn");btn.disabled=true;
+  const prog=$("#progress");prog.hidden=false;prog.textContent="Inspecting… 0%";
+  await new Promise(r=>setTimeout(r));
+  try{
+    await inspect((done,total)=>{prog.textContent="Inspecting… "+Math.round(done/total*100)+"%";});
+    renderReport();
+    show("#s3");
+    $("#s3").scrollIntoView({behavior:"smooth",block:"start"});
+  }catch(err){$("#runWarn").hidden=false;$("#runWarn").textContent="Inspection failed: "+(err.message||err);}
+  finally{prog.hidden=true;btn.disabled=false;btn.textContent="Inspect feed";inspectForced=false;$("#runWarn").hidden=true;}
 });
 
 $("#saveProfile").addEventListener("click",async()=>{
