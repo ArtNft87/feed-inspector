@@ -141,6 +141,7 @@
   .notices{border:1px solid var(--line);background:var(--card);padding:12px 14px;margin-bottom:18px}
   .notices-h{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-soft);text-transform:uppercase;margin-bottom:8px}
   .vh{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.04em;margin:26px 0 10px;padding-top:18px;border-top:1px solid var(--line-strong)}
+  .guide{background:var(--paper-2);border:1px solid var(--line);border-left:3px solid var(--ink-soft);padding:12px 14px;margin-bottom:14px;font-size:13.5px;line-height:1.5;color:var(--ink)}
   .notice{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
   .notice:first-of-type{border-top:none}
   .notice .pill{flex:0 0 auto;margin-top:1px}
@@ -213,6 +214,7 @@
   <section class="step" id="s2" hidden>
     <div class="step-h"><span class="num">2</span><h2>Confirm column mapping</h2><span class="sub" id="s2sub"></span></div>
     <div class="step-b">
+      <div class="guide">Not sure what each column is? You do not have to map everything. The tool already guessed what it could (see Auto-detect). Only <b>SKU</b> and <b>Name</b> are needed to run. Anything you leave as "(not in file)" is simply reported as a gap, never guessed and never written for you. So you can press Inspect now and read what is missing, then come back and map more if you want.</div>
       <div class="row-inline">
         <input type="text" id="supplier" aria-label="Supplier name" placeholder="Supplier name (saves this mapping for next time)">
         <button class="ghost" id="loadProfile">Load saved mapping</button>
@@ -230,7 +232,7 @@
         <span class="auto" id="profMsg"></span>
       </div>
       <div class="err" id="runWarn" role="alert" aria-live="polite" hidden></div>
-      <div class="note">Required fields are marked <span class="req">*</span>. Estimated values are never written into the clean file silently. They appear only in the exceptions report, labelled "confirm", for a person to accept.</div>
+      <div class="note">Only SKU and Name are required to run. Everything else is optional: if it is not in the feed, that shows up as a finding in the report. Estimated values are never written into the clean file silently, they appear only in the exceptions report, labelled "confirm", for a person to accept.</div>
     </div>
   </section>
 
@@ -287,6 +289,20 @@
         </div>
         <div class="note">The same barcode in more than one place. <b>across products</b>: a real error, marketplaces will merge two different products into one listing. <b>within product</b>: two sizes share a code, the wrong size can ship and the order gets cancelled. Each EAN is listed once per location so you can open both and split them.</div>
       </div>
+
+      <div id="mergeBlock" hidden>
+        <div class="vh">Producer code collisions</div>
+        <div class="actions" style="margin-top:0;margin-bottom:14px">
+          <button class="ghost" id="dlMerge">Download collisions (.csv)</button>
+        </div>
+        <div class="ledger-wrap">
+          <table class="ledger" id="mergeT">
+            <thead><tr><th>Producer code</th><th>Product id</th><th>Product name</th><th>Price</th><th>Flag</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="note">These products share one producer code, which is what merges them into a single card in the catalogue. <b>price mismatch</b> means the merged products have different prices, the case that creates the availability and pricing mess. Splitting them is your decision, the tool only surfaces the collisions. To stop it recurring, the durable fix is not to merge this supplier on producer code.</div>
+      </div>
     </div>
   </section>
 
@@ -300,14 +316,15 @@
 const FIELDS = [
   {key:"sku",        label:"SKU / ID",            req:true,  syn:["sku","id","kod","symbol","index","indeks","artikelnummer","art_nr","artnr","product_id","identyfikator","kod_produktu","ref"]},
   {key:"name",       label:"Name",                req:true,  syn:["name","nazwa","title","tytul","bezeichnung","produkt","product_name","nazwa_produktu","opis_krotki"]},
-  {key:"ean",        label:"EAN / GTIN",          req:true,  syn:["ean","gtin","barcode","kod_kreskowy","kodkreskowy","ean13","gtin13","upc"]},
-  {key:"price",      label:"Price (net)",         req:true,  syn:["price","cena","preis","netto","price_net","cena_netto","cena_zakupu","unit_price","kwota"]},
+  {key:"ean",        label:"EAN / GTIN",          req:false, syn:["ean","gtin","barcode","kod_kreskowy","kodkreskowy","ean13","gtin13","upc"]},
+  {key:"price",      label:"Price (net)",         req:false, syn:["price","cena","preis","netto","price_net","cena_netto","cena_zakupu","unit_price","kwota"]},
   {key:"currency",   label:"Currency",            req:false, syn:["currency","waluta","waehrung","wahrung","cur","ccy"]},
-  {key:"weight_kg",  label:"Weight (kg)",         req:true,  syn:["weight","waga","gewicht","masa","weight_kg","waga_kg","mass","ciezar","ciężar"]},
-  {key:"length_cm",  label:"Length (cm)",         req:true,  syn:["length","dlugosc","długość","laenge","lange","len","dlug","depth","glebokosc","głębokość"]},
-  {key:"width_cm",   label:"Width (cm)",          req:true,  syn:["width","szerokosc","szerokość","breite","wid","szer"]},
-  {key:"height_cm",  label:"Height (cm)",         req:true,  syn:["height","wysokosc","wysokość","hoehe","hohe","hgt","wys"]},
+  {key:"weight_kg",  label:"Weight (kg)",         req:false, syn:["weight","waga","gewicht","masa","weight_kg","waga_kg","mass","ciezar","ciężar"]},
+  {key:"length_cm",  label:"Length (cm)",         req:false, syn:["length","dlugosc","długość","laenge","lange","depth","glebokosc","głębokość"]},
+  {key:"width_cm",   label:"Width (cm)",          req:false, syn:["width","szerokosc","szerokość","breite","szer"]},
+  {key:"height_cm",  label:"Height (cm)",         req:false, syn:["height","wysokosc","wysokość","hoehe","hohe","wys"]},
   {key:"brand",      label:"Brand",               req:false, syn:["brand","marka","manufacturer","producent","producer","hersteller","marke","brand_name","vendor"]},
+  {key:"mpn",        label:"Producer code / MPN", req:false, syn:["mpn","producer_code","producer_no","producer_number","kod_producenta","numer_producenta","manufacturer_number","manufacturer_no","manufacturer_code","herstellernummer","model_number","kod_prod"]},
   {key:"category",   label:"Category",            req:false, syn:["category","kategoria","kategorie","cat","group","grupa","typ"]},
   {key:"gpsr_manufacturer", label:"GPSR · manufacturer", req:false, syn:["manufacturer_address","producent_adres","hersteller_adresse","manufacturer_info","gpsr_manufacturer","manufacturer_contact","dane_producenta"]},
   {key:"gpsr_responsible",  label:"GPSR · responsible person", req:false, syn:["responsible_person","responsible","osoba_odpowiedzialna","gpsr_responsible","eu_representative","authorised_representative","authorized_representative","podmiot_odpowiedzialny"]},
@@ -507,6 +524,9 @@ function autoMap(headers){
       let s=0;
       if(fs.norms.includes(h.leafN))s=3;                                   // whole leaf equals a synonym
       else if([...h.toks].some(t=>fs.toks.has(t)))s=2;                      // a whole word matches
+      // Dimensions are too easy to mis-match on a single word (e.g. "Długość rękawa"
+      // = sleeve length, not parcel length). Only an exact leaf name maps a dimension.
+      if(s===2&&DIM_KEYS.includes(fs.key))s=0;
       if(s>top){top=s;cands.length=0;cands.push(h);}
       else if(s===top&&s>0)cands.push(h);
     }
@@ -570,6 +590,7 @@ async function inspect(onProgress){
   let variantsTotal=0,eanValidCount=0,eanEmptyCount=0,eanJunkCount=0;  // variant-level EAN
   const variantGaps=[];const allVariants=[];const VARCAP=500000;
   const eanSeen=new Map();const dupKeys=new Set();const dupRefs=[];const DUPCAP=200000;const idName=new Map();
+  const mpnSeen=new Map();const mpnDupKeys=new Set();const mpnRefs=[];   // producer-code collisions (the Action / merge-key problem)
   // where the per-variant EAN lives, derived from the mapped EAN column
   let varBase=null,varAttr=null;
   if(MAP.ean&&MAP.ean.indexOf("@")>-1){const p=MAP.ean.split("@");varBase=p[0];varAttr=p[1];}
@@ -613,6 +634,23 @@ async function inspect(onProgress){
 
     if(!unmapped("sku")&&!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
     if(!unmapped("name")&&!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
+
+    // Producer code / MPN collisions. The catalogue merges products that share a
+    // producer code, but a supplier like Action reuses the same code for different
+    // products, so different items with different prices end up merged. We flag when
+    // the same code sits on more than one product.
+    if(!unmapped("mpn")){
+      const code=String(out.mpn).trim();
+      if(code){
+        const ref={id:rowId,name:String(out.name||""),price:num(out.price)};
+        const prev=mpnSeen.get(code);
+        if(prev===undefined)mpnSeen.set(code,ref);
+        else{
+          if(!mpnDupKeys.has(code)){mpnDupKeys.add(code);if(mpnRefs.length<DUPCAP)mpnRefs.push({code,...prev});}
+          if(mpnRefs.length<DUPCAP)mpnRefs.push({code,...ref});
+        }
+      }
+    }
 
     // EAN at the VARIANT level. A product is one row, but each size variant has its
     // own barcode. We classify every variant: valid / empty / junk (something there
@@ -735,12 +773,28 @@ async function inspect(onProgress){
   const dupEanTotal=dupCross+dupIntra;
   if(dupEanTotal>0)notices.push({tier:"block",field:"ean",msg:dupEanTotal.toLocaleString()+" duplicate EANs found ("+dupCross.toLocaleString()+" across different products, "+dupIntra.toLocaleString()+" within a single product), each blocks correct matching on marketplaces"});
 
-  REPORT={clean,exc,notices,variantGaps,allVariants,dupRecords,counts:{
+  // producer-code collisions: group by code, flag groups where products differ in price
+  const mpnGroups={};
+  mpnRefs.forEach(r=>{(mpnGroups[r.code]||(mpnGroups[r.code]=[])).push(r);});
+  const mergeRecords=[];let mergeCodes=0,mergePriceMismatch=0;
+  Object.keys(mpnGroups).forEach(code=>{
+    const refs=mpnGroups[code];
+    const ids=new Set(refs.map(r=>r.id));
+    if(ids.size<2)return;                       // only real cross-product collisions
+    mergeCodes++;
+    const prices=refs.map(r=>r.price).filter(p=>p!==null&&p!==undefined);
+    const mismatch=prices.length>1&&Math.max(...prices)!==Math.min(...prices);
+    if(mismatch)mergePriceMismatch++;
+    refs.forEach(r=>{if(mergeRecords.length<DUPCAP)mergeRecords.push({code,id:r.id,name:r.name,price:r.price,mismatch});});
+  });
+  if(mergeCodes>0)notices.push({tier:"confirm",field:"mpn",msg:mergeCodes.toLocaleString()+" producer codes are shared across different products ("+mergePriceMismatch.toLocaleString()+" of them with differing prices), which is what merges unrelated items into one card. You decide which to split"});
+
+  REPORT={clean,exc,notices,variantGaps,allVariants,dupRecords,mergeRecords,counts:{
     total:DATA.rows.length,blockRows,confirmRows,okRows,
     weightMapped:!unmapped("weight_kg"),weightMissing,
     brandMapped:!unmapped("brand"),brandMissing,brandSuggested,
     eanVariantMode:variantsTotal>0,variantsTotal,eanValidCount,eanEmptyCount,eanJunkCount,
-    dupEanTotal,dupCross,dupIntra
+    dupEanTotal,dupCross,dupIntra,mergeCodes,mergePriceMismatch
   }};
 }
 
@@ -854,6 +908,25 @@ function renderReport(){
     dt.appendChild(dfr);
     if(sd.length>DCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="6" class="empty">Showing first ${DCAP} of ${sd.length.toLocaleString()} duplicate locations. Download the CSV for the full list.</td>`;dt.appendChild(tr);}
   }else{db.hidden=true;}
+
+  // producer-code collisions
+  const mb=$("#mergeBlock");const merges=REPORT.mergeRecords||[];
+  if(merges.length){
+    mb.hidden=false;
+    const mt=$("#mergeT tbody");mt.innerHTML="";
+    const MCAP=500;
+    const sm=merges.slice().sort((a,b)=>(b.mismatch-a.mismatch)||String(a.code).localeCompare(String(b.code)));
+    const mfr=document.createDocumentFragment();
+    sm.slice(0,MCAP).forEach(x=>{
+      const tier=x.mismatch?"block":"confirm";const flag=x.mismatch?"price mismatch":"same price";
+      const price=(x.price===null||x.price===undefined)?"":x.price;
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td class="field">${esc(x.code)}</td><td class="id">${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(price)}</td><td><span class="pill ${tier}">${flag}</span></td>`;
+      mfr.appendChild(tr);
+    });
+    mt.appendChild(mfr);
+    if(sm.length>MCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="5" class="empty">Showing first ${MCAP} of ${sm.length.toLocaleString()} collision rows. Download the CSV for the full list.</td>`;mt.appendChild(tr);}
+  }else{mb.hidden=true;}
   $("#s3sub").textContent=c.total+" rows inspected";
 }
 function esc(s){return String(s===undefined||s===null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
@@ -898,6 +971,12 @@ function exportDup(){
   if(!a.length){return;}
   download("duplicate-eans.csv",toCSV(["ean","type","product_id","product_name","variant_uid","size"],
     a.map(x=>({ean:x.ean,type:x.kind,product_id:x.id,product_name:x.name,variant_uid:x.uid,size:x.size}))));
+}
+function exportMerge(){
+  const a=REPORT.mergeRecords||[];
+  if(!a.length){return;}
+  download("producer-code-collisions.csv",toCSV(["producer_code","product_id","product_name","price","flag"],
+    a.map(x=>({producer_code:x.code,product_id:x.id,product_name:x.name,price:(x.price==null?"":x.price),flag:x.mismatch?"price mismatch":"same price"}))));
 }
 
 /* ---------- flow ---------- */
@@ -987,6 +1066,7 @@ $("#dlExc").addEventListener("click",exportExc);
 $("#dlVarGaps").addEventListener("click",exportVariantGaps);
 $("#dlVarAll").addEventListener("click",exportVariantsAll);
 $("#dlDup").addEventListener("click",exportDup);
+$("#dlMerge").addEventListener("click",exportMerge);
 $("#restart").addEventListener("click",()=>{DATA={headers:[],rows:[]};MAP={};REPORT=null;hide("#s2");hide("#s3");$("#file").value="";$("#s1sub").textContent="XML · CSV · XLSX";window.scrollTo({top:0,behavior:"smooth"});});
 </script>
 </body>
