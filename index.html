@@ -439,15 +439,23 @@ function parseXML(text){
   // count element repetitions
   const counts={};
   for(const el of doc.getElementsByTagName("*")) counts[el.tagName]=(counts[el.tagName]||0)+1;
-  const candidates=Object.keys(counts).filter(t=>counts[t]>1);
-  if(!candidates.length)throw new Error("Could not find repeating product records in this XML.");
-  // pick the record node: the one that yields the most fields, weighted by how often it repeats
-  let best=null,bestScore=-1;
+  // candidates: every element type except the document root (which contains everything)
+  const rootTag=doc.documentElement?doc.documentElement.tagName:null;
+  const candidates=Object.keys(counts).filter(t=>t!==rootTag);
+  if(!candidates.length)throw new Error("Could not find product records in this XML.");
+  // pick the record node: most fields, weighted by how often it repeats; on a tie the
+  // deeper element wins, so a single <product> beats its repeating <item> children and
+  // beats an outer <offers> wrapper. This keeps small (single-product) files working too.
+  const ancestors=el=>{let n=0,p=el.parentElement;while(p){n++;p=p.parentElement;}return n;};
+  let best=null,bestScore=-1,bestDepth=-1;
   for(const tag of candidates){
-    const f={};flattenRecord(doc.getElementsByTagName(tag)[0],f);
+    const sample=doc.getElementsByTagName(tag)[0];
+    const f={};flattenRecord(sample,f);
     const nf=Object.keys(f).length;
+    if(nf<2)continue;
     const score=nf*Math.log10(counts[tag]+1);
-    if(nf>=2&&score>bestScore){bestScore=score;best=tag;}
+    const dep=ancestors(sample);
+    if(score>bestScore+1e-9||(Math.abs(score-bestScore)<1e-9&&dep>bestDepth)){bestScore=score;best=tag;bestDepth=dep;}
   }
   if(!best){let n=0;for(const t of candidates){if(counts[t]>n){n=counts[t];best=t;}}}
   const nodes=[...doc.getElementsByTagName(best)];
@@ -789,6 +797,7 @@ function renderReport(){
   }else{vb.hidden=true;}
   $("#s3sub").textContent=c.total+" rows inspected";
 }
+function esc(s){return String(s===undefined||s===null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 
 /* ---------- exports ---------- */
 function toCSV(headers,rows){
