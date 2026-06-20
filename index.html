@@ -1,1073 +1,413 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Feed Inspector, supplier file normalizer</title>
+<title>Assortment Fixer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
-    /* surface: kraft / manifest document, grounded in the shipping-feed subject */
-    --paper:#efe9dd;
-    --paper-2:#e6dfd0;
-    --card:#fbf8f1;
-    --ink:#23201a;
-    --ink-soft:#6f6757;
-    --line:#cabfa8;
-    --line-strong:#b3a585;
-    /* brand accent: stamp ink blue, used only for primary actions + wordmark */
-    --accent:#1f3a5f;
-    --accent-ink:#fbf8f1;
-    /* status palette, reserved strictly for validation flags, never decoration */
-    --block:#9c2b1e;     /* hard / critical */
-    --block-bg:#f4ddd8;
-    --confirm:#9a6310;   /* estimate, needs confirmation */
-    --confirm-bg:#f6e9cf;
-    --ok:#436b32;
-    --ok-bg:#e2ecd4;
-    --mono:"SFMono-Regular",ui-monospace,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
-    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    --paper:#efe9dd; --paper-2:#e6dfd0; --card:#f7f3ea;
+    --ink:#23201a; --ink-soft:#6f6757; --line:#cabfa8; --line-strong:#b3a685;
+    --accent:#3a4d39; --good:#3f6b3f; --warn:#9a6a16; --bad:#9a3b2f;
+    --mono:"SFMono-Regular",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+    --grot:"Inter","Helvetica Neue",Arial,sans-serif;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;padding:0}
-  body{
-    background:
-      repeating-linear-gradient(0deg,transparent 0 39px,rgba(120,105,75,.05) 39px 40px),
-      var(--paper);
-    color:var(--ink);
-    font-family:var(--sans);
-    font-size:15px;
-    line-height:1.5;
-    -webkit-font-smoothing:antialiased;
-  }
-  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
-
-  /* masthead styled like the top of a goods manifest */
-  header.mast{
-    border:2px solid var(--ink);
-    background:var(--card);
-    padding:18px 22px;
-    display:flex;flex-wrap:wrap;align-items:baseline;gap:14px 26px;
-    position:relative;
-  }
-  header.mast:before{
-    content:"FORM / FEED-01";
-    position:absolute;top:-2px;right:18px;transform:translateY(-50%);
-    background:var(--paper);padding:0 8px;
-    font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--ink-soft);
-  }
-  .word{font-family:var(--mono);font-weight:700;font-size:22px;letter-spacing:.02em}
-  .word b{color:var(--accent)}
-  .tag{font-size:13px;color:var(--ink-soft);max-width:560px}
-  .stamp{
-    margin-left:auto;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
-    border:1.5px solid var(--line-strong);color:var(--ink-soft);
-    padding:6px 10px;border-radius:3px;transform:rotate(-3deg);white-space:nowrap;
-  }
-
-  /* numbered steps, real sequence, so numbering earns its place */
-  .step{margin-top:26px;border:1px solid var(--line);background:var(--card)}
-  .step-h{
-    display:flex;align-items:center;gap:12px;
-    padding:11px 16px;border-bottom:1px solid var(--line);
-    background:var(--paper-2);
-  }
-  .num{
-    font-family:var(--mono);font-weight:700;font-size:13px;
-    width:26px;height:26px;flex:0 0 26px;border-radius:50%;
-    background:var(--ink);color:var(--card);
-    display:grid;place-items:center;
-  }
-  .step-h h2{margin:0;font-size:15px;font-weight:600;letter-spacing:.01em}
-  .step-h .sub{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
-  .step-b{padding:18px 16px}
-  .step[hidden]{display:none}
-
-  /* drop zone */
-  .drop{
-    border:2px dashed var(--line-strong);border-radius:4px;
-    padding:34px 20px;text-align:center;cursor:pointer;
-    transition:background .12s,border-color .12s;
-    background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(120,105,75,.03) 10px 20px);
-  }
+  html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--grot);font-size:15px;line-height:1.45}
+  body{padding:0 18px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  .topbar{height:8px;background:var(--accent);margin:0 -18px 0}
+  header.head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;border:1px solid var(--line-strong);border-top:none;background:var(--card);padding:22px 26px;position:relative}
+  .brand{font-family:var(--mono);font-weight:700;font-size:23px;letter-spacing:.02em}
+  .brand .dot{color:var(--accent)}
+  .sub{color:var(--ink-soft);font-size:13.5px;max-width:520px;margin-top:6px}
+  .stamp{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-soft);border:1px solid var(--line-strong);padding:7px 11px;text-transform:uppercase;transform:rotate(1.2deg);white-space:nowrap}
+  section.step{border:1px solid var(--line-strong);border-top:none;background:var(--card)}
+  .step-h{display:flex;align-items:center;gap:13px;padding:15px 26px;background:var(--paper-2);border-bottom:1px solid var(--line)}
+  .num{width:25px;height:25px;border-radius:50%;background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:13px;display:flex;align-items:center;justify-content:center;flex:none}
+  .step-h h2{margin:0;font-size:16px;font-weight:650}
+  .step-h .hsub{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+  .step-b{padding:22px 26px}
+  .drop{border:1.5px dashed var(--line-strong);background:repeating-linear-gradient(135deg,transparent,transparent 10px,rgba(179,166,133,.10) 10px,rgba(179,166,133,.10) 20px);padding:40px;text-align:center;cursor:pointer}
   .drop:hover,.drop.over{background:var(--paper-2);border-color:var(--accent)}
-  .drop .big{font-family:var(--mono);font-size:15px}
-  .drop .small{font-size:12.5px;color:var(--ink-soft);margin-top:6px}
-  .formats{font-family:var(--mono);font-size:12px;color:var(--ink-soft);margin-top:10px;letter-spacing:.06em}
-
-  .row-inline{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
-  input[type=text]{
-    font-family:var(--mono);font-size:13px;padding:8px 10px;
-    border:1px solid var(--line-strong);background:var(--card);color:var(--ink);
-    border-radius:3px;min-width:240px;flex:1;
-  }
-  input[type=text]:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-
-  button{
-    font-family:var(--mono);font-size:13px;letter-spacing:.04em;
-    padding:9px 16px;border:1px solid var(--ink);background:var(--accent);color:var(--accent-ink);
-    border-radius:3px;cursor:pointer;
-  }
-  button.ghost{background:transparent;color:var(--ink)}
-  button.ghost:hover{background:var(--paper-2)}
+  .drop .big{font-family:var(--mono);font-size:18px}
+  .drop .small{color:var(--ink-soft);font-size:13px;margin-top:7px}
+  .err{color:var(--bad);font-family:var(--mono);font-size:13px;margin-top:12px}
+  button{font-family:var(--mono);font-size:13px;background:var(--accent);color:var(--paper);border:none;padding:11px 17px;cursor:pointer;letter-spacing:.03em}
   button:hover{filter:brightness(1.08)}
-  button[disabled]{opacity:.4;cursor:not-allowed}
-
-  /* mapping grid */
-  table{border-collapse:collapse;width:100%;font-size:13.5px}
-  .map-t th,.map-t td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:middle}
-  .map-t th{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--ink-soft);background:var(--paper-2);font-weight:600}
-  .map-t code{font-family:var(--mono);font-size:12.5px}
-  .req{color:var(--block);font-weight:700;margin-left:4px}
-  select{
-    font-family:var(--mono);font-size:12.5px;padding:6px 8px;
-    border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:3px;width:100%;
-  }
-  .auto{font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
-  .auto.hit{color:var(--accent)}
-
-  /* report */
-  .heroes{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px}
-  .hero{flex:1 1 240px;border:1.5px solid var(--line-strong);background:var(--card);padding:16px 18px;border-radius:4px}
-  .hero .hl{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
-  .hero .hv{font-family:var(--mono);font-size:40px;line-height:1.1;font-weight:700;margin:4px 0 2px}
-  .hero .hv span{font-size:20px;margin-left:2px}
-  .hero .hs{font-size:12.5px;color:var(--ink-soft)}
-  .hero.good{border-color:var(--ok);background:var(--ok-bg)} .hero.good .hv{color:var(--ok)}
-  .hero.warn{border-color:var(--confirm);background:var(--confirm-bg)} .hero.warn .hv{color:var(--confirm)}
-  .hero.bad{border-color:var(--block);background:var(--block-bg)} .hero.bad .hv{color:var(--block)}
-  .hero.na .hv{font-size:22px;color:var(--ink-soft);margin-top:8px}
-  .summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
-  .notices{border:1px solid var(--line);background:var(--card);padding:12px 14px;margin-bottom:18px}
-  .notices-h{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-soft);text-transform:uppercase;margin-bottom:8px}
-  .vh{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.04em;margin:26px 0 10px;padding-top:18px;border-top:1px solid var(--line-strong)}
-  .guide{background:var(--paper-2);border:1px solid var(--line);border-left:3px solid var(--ink-soft);padding:12px 14px;margin-bottom:14px;font-size:13.5px;line-height:1.5;color:var(--ink)}
-  .notice{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
-  .notice:first-of-type{border-top:none}
-  .notice .pill{flex:0 0 auto;margin-top:1px}
-  .chip{
-    font-family:var(--mono);font-size:12px;letter-spacing:.04em;
-    padding:8px 12px;border-radius:3px;border:1px solid var(--line-strong);background:var(--card);
-  }
-  .chip b{font-size:16px;display:block;letter-spacing:0}
-  .chip.block{border-color:var(--block);background:var(--block-bg);color:var(--block)}
-  .chip.confirm{border-color:var(--confirm);background:var(--confirm-bg);color:var(--confirm)}
-  .chip.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
-
-  .ledger-wrap{border:1px solid var(--line);max-height:460px;overflow:auto}
-  .ledger{font-size:13px}
-  .ledger th,.ledger td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
-  .ledger th{position:sticky;top:0;background:var(--paper-2);font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--ink-soft);z-index:1}
-  .ledger td.id{font-family:var(--mono);font-size:12px;white-space:nowrap}
-  .ledger td.field{font-family:var(--mono);font-size:12px}
-  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 7px;border-radius:10px;white-space:nowrap}
-  .pill.block{background:var(--block-bg);color:var(--block);border:1px solid var(--block)}
-  .pill.confirm{background:var(--confirm-bg);color:var(--confirm);border:1px solid var(--confirm)}
-  .pill.soft{background:var(--paper-2);color:var(--ink-soft);border:1px solid var(--line-strong)}
-  .sugg{color:var(--confirm);font-family:var(--mono);font-size:12px}
-
-  .opt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);margin:4px 0}
-  .opt input{width:16px;height:16px;accent-color:var(--accent)}
-  .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
-  .note{font-size:12.5px;color:var(--ink-soft);margin-top:12px;border-left:3px solid var(--line-strong);padding-left:12px}
-  .err{color:var(--block);font-family:var(--mono);font-size:13px;margin-top:10px}
-  .empty{font-family:var(--mono);color:var(--ink-soft);font-size:13px;padding:20px;text-align:center}
-  a.dl{color:var(--accent);font-family:var(--mono);font-size:13px}
-  footer{margin-top:34px;font-family:var(--mono);font-size:11px;color:var(--ink-soft);letter-spacing:.05em;text-align:center}
-  @media (max-width:640px){
-    .stamp{display:none}
-    input[type=text]{min-width:0}
-  }
-  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  button:disabled{opacity:.5;cursor:default}
+  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line-strong)}
+  button.ghost:hover{background:var(--paper-2);filter:none}
+  .hidden{display:none}
+  /* triage tiles */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px}
+  .tile{border:1px solid var(--line);background:var(--paper);padding:13px 15px}
+  .tile .k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--ink-soft);text-transform:uppercase}
+  .tile .v{font-size:26px;font-weight:700;margin-top:4px}
+  .tile .v small{font-size:14px;font-weight:500;color:var(--ink-soft)}
+  /* coverage meter (the signature) */
+  .meter{margin:18px 0 6px;border:1px solid var(--line-strong);background:var(--paper)}
+  .meter .lab{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;padding:9px 13px;border-bottom:1px solid var(--line)}
+  .meter .bar{height:26px;background:repeating-linear-gradient(135deg,var(--paper-2),var(--paper-2) 8px,#ded6c4 8px,#ded6c4 16px);position:relative;overflow:hidden}
+  .meter .fill{height:100%;background:var(--accent);width:0;transition:width .35s ease}
+  .meter .pct{position:absolute;top:0;left:0;right:0;height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:var(--ink);mix-blend-mode:luminosity}
+  .vh{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.04em;margin:26px 0 4px;padding-top:18px;border-top:1px solid var(--line-strong)}
+  .vh:first-child{border-top:none;padding-top:0;margin-top:6px}
+  .vnote{color:var(--ink-soft);font-size:13px;margin:0 0 12px}
+  /* map table */
+  .mwrap{border:1px solid var(--line);max-height:460px;overflow:auto;background:var(--paper)}
+  table.map{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.map th{position:sticky;top:0;background:var(--paper-2);font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-soft);text-align:left;padding:9px 11px;border-bottom:1px solid var(--line)}
+  table.map td{padding:8px 11px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.map tr:last-child td{border-bottom:none}
+  table.map .cnt{font-family:var(--mono);text-align:right;white-space:nowrap;color:var(--ink-soft)}
+  table.map .orig{font-family:var(--mono)}
+  table.map input{width:100%;font-family:var(--grot);font-size:13.5px;padding:6px 8px;border:1px solid var(--line-strong);background:var(--card)}
+  table.map input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  tr.done td{background:rgba(63,107,63,.08)}
+  tr.flag .orig{color:var(--bad)}
+  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;padding:2px 7px;border:1px solid;text-transform:uppercase}
+  .pill.placeholder{color:var(--bad);border-color:var(--bad)}
+  .pill.messy{color:var(--warn);border-color:var(--warn)}
+  .row-inline{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .row-inline input[type=text]{flex:1;min-width:240px;font-family:var(--mono);font-size:13px;padding:10px 12px;border:1px solid var(--line-strong);background:var(--paper)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .note{font-size:12.5px;color:var(--ink-soft);margin-top:12px;border-left:2px solid var(--line-strong);padding-left:11px}
+  .guide{background:var(--paper-2);border:1px solid var(--line);border-left:3px solid var(--ink-soft);padding:12px 14px;margin-bottom:16px;font-size:13.5px;line-height:1.5}
+  footer{text-align:center;color:var(--ink-soft);font-family:var(--mono);font-size:11px;letter-spacing:.08em;padding:26px 0 0;text-transform:uppercase}
+  @media(max-width:620px){.step-b{padding:18px 15px}header.head{flex-direction:column}.stamp{align-self:flex-start}}
 </style>
 </head>
 <body>
+<div class="topbar"></div>
 <div class="wrap">
-
-  <header class="mast">
+  <header class="head">
     <div>
-      <div class="word">FEED<b>·</b>INSPECTOR</div>
+      <div class="brand">ASSORTMENT<span class="dot"> · </span>FIXER</div>
+      <div class="sub">Load the marketplace error file and clear it in bulk. A handful of category and brand decisions fix thousands of products. Nothing is changed for you, the tool proposes, you decide, then it writes a corrections file to sync back.</div>
     </div>
-    <div class="tag">Drop a supplier feed, get one clean import-ready file. Leads on the two that cost you most: missing weight and missing brand across the catalog.</div>
-    <div class="stamp">v0 · INSPECTION COPY</div>
+    <div class="stamp">Companion to Feed Inspector</div>
   </header>
 
-  <!-- STEP 1: load -->
   <section class="step" id="s1">
-    <div class="step-h"><span class="num">1</span><h2>Load a supplier file</h2><span class="sub" id="s1sub">XML · CSV · XLSX</span></div>
+    <div class="step-h"><span class="num">1</span><h2>Load the error file</h2><span class="hsub" id="s1sub">.xlsx from the partner portal</span></div>
     <div class="step-b">
-      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a file">
-        <div class="big">Drop a file here or click to choose</div>
-        <div class="small">Nothing leaves your browser. Files are parsed locally.</div>
-        <div class="formats">.xml &nbsp;·&nbsp; .csv &nbsp;·&nbsp; .xlsx &nbsp;·&nbsp; .xls</div>
+      <div class="drop" id="drop">
+        <div class="big">Drop the assortment error file or click to choose</div>
+        <div class="small">Everything is parsed locally in your browser. Nothing is uploaded.</div>
+        <div class="small">Example: AssortmentErrors.xlsx exported from the partner portal</div>
       </div>
-      <input type="file" id="file" accept=".xml,.csv,.xlsx,.xls,text/xml,text/csv" hidden>
-      <div class="row-inline">
-        <input type="text" id="url" aria-label="Direct file URL" placeholder="…or paste a direct file URL (CORS permitting)">
-        <button class="ghost" id="fetchBtn">Fetch URL</button>
-      </div>
+      <input type="file" id="file" class="hidden" accept=".xlsx,.xls,.csv">
       <div class="err" id="s1err" role="alert" aria-live="polite" hidden></div>
     </div>
   </section>
 
-  <!-- STEP 2: map -->
-  <section class="step" id="s2" hidden>
-    <div class="step-h"><span class="num">2</span><h2>Confirm column mapping</h2><span class="sub" id="s2sub"></span></div>
+  <section class="step hidden" id="s2">
+    <div class="step-h"><span class="num">2</span><h2>Decide the fixes</h2><span class="hsub" id="s2sub"></span></div>
     <div class="step-b">
-      <div class="guide">Not sure what each column is? You do not have to map everything. The tool already guessed what it could (see Auto-detect). Only <b>SKU</b> and <b>Name</b> are needed to run. Anything you leave as "(not in file)" is simply reported as a gap, never guessed and never written for you. So you can press Inspect now and read what is missing, then come back and map more if you want.</div>
-      <div class="row-inline">
-        <input type="text" id="supplier" aria-label="Supplier name" placeholder="Supplier name (saves this mapping for next time)">
-        <button class="ghost" id="loadProfile">Load saved mapping</button>
-        <button class="ghost" id="saveProfile">Save mapping</button>
+      <div class="guide">You are not fixing products one by one. Each row below is one decision that applies to every product sharing that value. Map a vague or placeholder category to a precise target path, and clean up brand names. The bar shows how many errors your decisions already clear.</div>
+
+      <div class="tiles" id="tiles"></div>
+
+      <div class="vh" style="border-top:none;padding-top:6px;margin-top:18px">Category paths</div>
+      <p class="vnote">These products are offline because the marketplace cannot assign a product type, the category is missing or too vague. Set a precise target path once per value. Sorted by how many products it fixes.</p>
+      <div class="meter">
+        <div class="lab"><span>Category errors cleared by your mappings</span><span id="catCov">0 of 0</span></div>
+        <div class="bar"><div class="fill" id="catFill"></div><div class="pct" id="catPct">0%</div></div>
       </div>
-      <div style="overflow:auto;margin-top:14px">
-        <table class="map-t" id="mapT">
-          <thead><tr><th>Target field</th><th>Source column</th><th>Auto-detect</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div class="mwrap"><table class="map" id="catT"><thead><tr><th style="width:42%">Current category in feed</th><th class="cnt">Products</th><th style="width:42%">Target category path</th></tr></thead><tbody></tbody></table></div>
+
+      <div class="vh">Brand names</div>
+      <p class="vnote">Placeholder or malformed brands, marked below. Map each to the correct brand. Leave the rest blank.</p>
+      <div class="meter">
+        <div class="lab"><span>Products with a brand correction</span><span id="brCov">0</span></div>
+        <div class="bar"><div class="fill" id="brFill"></div><div class="pct" id="brPct">0</div></div>
       </div>
+      <div class="mwrap"><table class="map" id="brT"><thead><tr><th style="width:42%">Brand in feed</th><th class="cnt">Products</th><th style="width:42%">Correct brand</th></tr></thead><tbody></tbody></table></div>
+
       <div class="actions">
-        <button id="runBtn">Inspect feed</button>
-        <span class="auto" id="progress" hidden></span>
-        <span class="auto" id="profMsg"></span>
+        <button id="goExport">Review corrections</button>
+        <button class="ghost" id="saveMaps">Save mapping</button>
+        <button class="ghost" id="loadMaps">Load mapping</button>
+        <button class="ghost" id="dlMaps">Export mapping (.json)</button>
+        <button class="ghost" id="importMaps">Import mapping (.json)</button>
+        <input type="file" id="mapsFile" class="hidden" accept=".json">
       </div>
-      <div class="err" id="runWarn" role="alert" aria-live="polite" hidden></div>
-      <div class="note">Only SKU and Name are required to run. Everything else is optional: if it is not in the feed, that shows up as a finding in the report. Estimated values are never written into the clean file silently, they appear only in the exceptions report, labelled "confirm", for a person to accept.</div>
+      <div class="note">Your mappings are kept between sessions and can be exported as a file to reuse next month or share. The target paths are yours to define, the tool never invents a category.</div>
     </div>
   </section>
 
-  <!-- STEP 3: report -->
-  <section class="step" id="s3" hidden>
-    <div class="step-h"><span class="num">3</span><h2>Inspection report</h2><span class="sub" id="s3sub"></span></div>
+  <section class="step hidden" id="s3">
+    <div class="step-h"><span class="num">3</span><h2>Corrections and task lists</h2><span class="hsub" id="s3sub"></span></div>
     <div class="step-b">
-      <div class="heroes" id="heroes"></div>
-      <div class="summary" id="summary" aria-live="polite"></div>
-
-      <div class="notices" id="notices" hidden></div>
-
-      <div class="opt"><input type="checkbox" id="optBlock" checked><label for="optBlock">Exclude rows with critical gaps from the clean file</label></div>
-
-      <div class="actions" style="margin-top:6px;margin-bottom:18px">
-        <button id="dlClean">Download clean file (.csv)</button>
-        <button class="ghost" id="dlExc">Download exceptions report (.csv)</button>
-        <button class="ghost" id="restart">Start over</button>
+      <div class="tiles" id="exTiles"></div>
+      <div class="vh" style="border-top:none;padding-top:6px;margin-top:18px">Ready to apply</div>
+      <p class="vnote">One row per product and field, with the old value and the value you chose. Apply these in the feed pipeline or sync, then refresh the portal.</p>
+      <div class="actions" style="margin-top:6px">
+        <button id="dlCorr">Download corrections (.csv)</button>
       </div>
 
-      <div class="ledger-wrap">
-        <table class="ledger" id="ledgerT">
-          <thead><tr><th>Row / SKU</th><th>Field</th><th>Tier</th><th>What we found</th><th>Suggested</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="note">Tiers, <b>block</b>: critical gap, costs margin or breaks import. <b>confirm</b>: we can estimate, you decide. <b>soft</b>: optional or GPSR field presence only, no legal judgement made here. The responsible person at your business owns the compliance decision.</div>
-
-      <div id="variantBlock" hidden>
-        <div class="vh">EAN gaps by variant</div>
-        <div class="actions" style="margin-top:0;margin-bottom:14px">
-          <button class="ghost" id="dlVarGaps">Download EAN gaps (.csv)</button>
-          <button class="ghost" id="dlVarAll">Download full variant map (.csv)</button>
-        </div>
-        <div class="ledger-wrap">
-          <table class="ledger" id="variantT">
-            <thead><tr><th>Product id</th><th>Product name</th><th>Variant uid</th><th>Size</th><th>EAN</th><th>State</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="note">Paste a <b>variant uid</b> into your search to jump straight to that size in the feed or your system. <b>empty</b>: no code. <b>junk</b>: something is there but it is not a real barcode.</div>
-      </div>
-
-      <div id="dupBlock" hidden>
-        <div class="vh">Duplicate EANs</div>
-        <div class="actions" style="margin-top:0;margin-bottom:14px">
-          <button class="ghost" id="dlDup">Download duplicate EANs (.csv)</button>
-        </div>
-        <div class="ledger-wrap">
-          <table class="ledger" id="dupT">
-            <thead><tr><th>EAN</th><th>Type</th><th>Product id</th><th>Product name</th><th>Variant uid</th><th>Size</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="note">The same barcode in more than one place. <b>across products</b>: a real error, marketplaces will merge two different products into one listing. <b>within product</b>: two sizes share a code, the wrong size can ship and the order gets cancelled. Each EAN is listed once per location so you can open both and split them.</div>
-      </div>
-
-      <div id="mergeBlock" hidden>
-        <div class="vh">Producer code collisions</div>
-        <div class="actions" style="margin-top:0;margin-bottom:14px">
-          <button class="ghost" id="dlMerge">Download collisions (.csv)</button>
-        </div>
-        <div class="ledger-wrap">
-          <table class="ledger" id="mergeT">
-            <thead><tr><th>Producer code</th><th>Product id</th><th>Product name</th><th>Price</th><th>Flag</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="note">These products share one producer code, which is what merges them into a single card in the catalogue. <b>price mismatch</b> means the merged products have different prices, the case that creates the availability and pricing mess. Splitting them is your decision, the tool only surfaces the collisions. To stop it recurring, the durable fix is not to merge this supplier on producer code.</div>
-      </div>
+      <div class="vh">Task lists, for what cannot be mapped</div>
+      <p class="vnote">These cannot be derived from one decision, they need real content per product. Each list is a clean worklist to hand to a person, with product id, brand and category for context.</p>
+      <div class="actions" style="margin-top:6px" id="taskBtns"></div>
+      <div class="note">A missing or unregistered barcode, a missing specification value or a missing image cannot be guessed without fabricating data, so the tool lists them for a person rather than filling them in.</div>
     </div>
   </section>
 
-  <footer>FEED-INSPECTOR · flags and reports · does not certify compliance · does not decide for you</footer>
+  <footer>Assortment Fixer · proposes and writes corrections you approve · does not invent data · does not decide for you</footer>
 </div>
 
 <script>
 "use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
 
-/* ---------- canonical target schema ---------- */
-const FIELDS = [
-  {key:"sku",        label:"SKU / ID",            req:true,  syn:["sku","id","kod","symbol","index","indeks","artikelnummer","art_nr","artnr","product_id","identyfikator","kod_produktu","ref"]},
-  {key:"name",       label:"Name",                req:true,  syn:["name","nazwa","title","tytul","bezeichnung","produkt","product_name","nazwa_produktu","opis_krotki"]},
-  {key:"ean",        label:"EAN / GTIN",          req:false, syn:["ean","gtin","barcode","kod_kreskowy","kodkreskowy","ean13","gtin13","upc"]},
-  {key:"price",      label:"Price (net)",         req:false, syn:["price","cena","preis","netto","price_net","cena_netto","cena_zakupu","unit_price","kwota"]},
-  {key:"currency",   label:"Currency",            req:false, syn:["currency","waluta","waehrung","wahrung","cur","ccy"]},
-  {key:"weight_kg",  label:"Weight (kg)",         req:false, syn:["weight","waga","gewicht","masa","weight_kg","waga_kg","mass","ciezar","ciężar"]},
-  {key:"length_cm",  label:"Length (cm)",         req:false, syn:["length","dlugosc","długość","laenge","lange","depth","glebokosc","głębokość"]},
-  {key:"width_cm",   label:"Width (cm)",          req:false, syn:["width","szerokosc","szerokość","breite","szer"]},
-  {key:"height_cm",  label:"Height (cm)",         req:false, syn:["height","wysokosc","wysokość","hoehe","hohe","wys"]},
-  {key:"brand",      label:"Brand",               req:false, syn:["brand","marka","manufacturer","producent","producer","hersteller","marke","brand_name","vendor"]},
-  {key:"mpn",        label:"Producer code / MPN", req:false, syn:["mpn","producer_code","producer_no","producer_number","kod_producenta","numer_producenta","manufacturer_number","manufacturer_no","manufacturer_code","herstellernummer","model_number","kod_prod"]},
-  {key:"category",   label:"Category",            req:false, syn:["category","kategoria","kategorie","cat","group","grupa","typ"]},
-  {key:"gpsr_manufacturer", label:"GPSR · manufacturer", req:false, syn:["manufacturer_address","producent_adres","hersteller_adresse","manufacturer_info","gpsr_manufacturer","manufacturer_contact","dane_producenta"]},
-  {key:"gpsr_responsible",  label:"GPSR · responsible person", req:false, syn:["responsible_person","responsible","osoba_odpowiedzialna","gpsr_responsible","eu_representative","authorised_representative","authorized_representative","podmiot_odpowiedzialny"]},
-  {key:"gpsr_warnings",     label:"GPSR · safety warnings", req:false, syn:["warnings","ostrzezenia","ostrzeżenia","safety_warning","warnhinweise","safety","safety_info","instrukcje_bezpieczenstwa"]},
-];
-const GPSR_KEYS = ["gpsr_manufacturer","gpsr_responsible","gpsr_warnings"];
-const DIM_KEYS = ["length_cm","width_cm","height_cm"];
-
-/* weight estimate heuristic, only fires on a keyword match, never a blind guess */
-const WEIGHT_HINTS = [
-  {re:/(rower|bike|fahrrad|велос)/i,                          range:[8,18],  oversize:true},
-  {re:/(biurko|desk|schreibtisch|stol|stół|table|tisch)/i,    range:[15,40], oversize:true},
-  {re:/(szafa|wardrobe|schrank|komoda|regal|shelf|regał)/i,   range:[20,60], oversize:true},
-  {re:/(sofa|kanapa|fotel|armchair|couch)/i,                  range:[25,70], oversize:true},
-  {re:/(bieznia|bieżnia|treadmill|orbitrek|elliptical|rowerek)/i, range:[25,90], oversize:true},
-  {re:/(namiot|tent|zelt|kajak|kayak|canoe)/i,                range:[5,25],  oversize:true},
-  {re:/(hantle|dumbbell|kettlebell|obciazenie|obciążenie|plate|sztanga|barbell)/i, range:[2,30], oversize:false},
-  {re:/(opona|tire|tyre|reifen)/i,                            range:[1,4],   oversize:false},
-];
-// weight at or above this means dimensions are needed for accurate carrier pricing
-const OVERSIZE_KG = 15;
-
-/* ---------- storage wrapper: artifact window.storage, else localStorage, else memory ---------- */
-const mem={};
-const store={
-  async set(k,v){
-    try{ if(window.storage&&window.storage.set){await window.storage.set(k,JSON.stringify(v),false);return;} }catch(e){}
-    try{ localStorage.setItem(k,JSON.stringify(v));return; }catch(e){}
-    mem[k]=v;
-  },
-  async get(k){
-    try{ if(window.storage&&window.storage.get){const r=await window.storage.get(k,false);return r?JSON.parse(r.value):null;} }catch(e){}
-    try{ const r=localStorage.getItem(k);return r?JSON.parse(r):null; }catch(e){}
-    return (k in mem)?mem[k]:null;
-  }
-};
+/* ---------- storage (artifact -> localStorage -> memory) ---------- */
+const store=(()=>{
+  const mem={};
+  try{ if(window.storage&&window.storage.get) return {
+    async get(k){try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}catch(e){return null;}},
+    async set(k,v){try{await window.storage.set(k,JSON.stringify(v));}catch(e){}}
+  };}catch(e){}
+  try{ const t="__t";localStorage.setItem(t,"1");localStorage.removeItem(t);
+    return {async get(k){const v=localStorage.getItem(k);return v?JSON.parse(v):null;},async set(k,v){localStorage.setItem(k,JSON.stringify(v));}};
+  }catch(e){}
+  return {async get(k){return mem[k]||null;},async set(k,v){mem[k]=v;}};
+})();
+const CK="galaxus:catmap", BK="galaxus:brandmap";
 
 /* ---------- state ---------- */
-let DATA={headers:[],rows:[]};   // parsed source
-let MAP={};                      // canonicalKey -> sourceHeader ("" = unmapped)
-let MAPINFO={};                  // canonicalKey -> "exact" | "token" | "ambiguous" | ""
-let REPORT=null;                 // {clean, exceptions, counts}
+let ERR=[];                 // {pid,gtin,brand,category,title,field,easy}
+let catGroups=[], brGroups=[];
+let CATMAP={}, BRANDMAP={};
 
-/* ---------- helpers ---------- */
-const $=s=>document.querySelector(s);
-const norm=s=>String(s||"").toLowerCase().replace(/[\s._\-\/]+/g,"").trim();
-function show(id){$(id).hidden=false}
-function hide(id){$(id).hidden=true}
-function setErr(msg){const e=$("#s1err");if(!msg){e.hidden=true;return}e.hidden=false;e.textContent=msg}
+const FIELD={CAT:"ProviderCategoryPath", TITLE:"ProductTitle_de", IMG:"MainImageURL", GTIN:"Gtin", SPEC:"SpecificationValue"};
 
-/* ---------- parsers ---------- */
-function parseCSV(text){
-  if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);   // strip UTF-8 BOM
-  // delimiter sniff
-  const head=text.slice(0,4000);
-  const delim=[";","\t","|",","].sort((a,b)=>(head.split(b).length-head.split(a).length))[0]||",";
-  const rows=[];let i=0,field="",row=[],q=false;
-  const push=()=>{row.push(field);field=""};
-  const eol=()=>{push();rows.push(row);row=[]};
-  while(i<text.length){
-    const c=text[i];
-    if(q){
-      if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; }
-      else field+=c;
-    }else{
-      if(c==='"')q=true;
-      else if(c===delim)push();
-      else if(c==='\n')eol();
-      else if(c==='\r'){/*skip*/}
-      else field+=c;
-    }
-    i++;
+/* ---------- file load ---------- */
+function setErr(m){const e=$("#s1err");if(!m){e.hidden=true;e.textContent="";}else{e.hidden=false;e.textContent=m;}}
+$("#drop").addEventListener("click",()=>$("#file").click());
+$("#drop").addEventListener("dragover",e=>{e.preventDefault();$("#drop").classList.add("over");});
+$("#drop").addEventListener("dragleave",()=>$("#drop").classList.remove("over"));
+$("#drop").addEventListener("drop",e=>{e.preventDefault();$("#drop").classList.remove("over");if(e.dataTransfer.files[0])readFile(e.dataTransfer.files[0]);});
+$("#file").addEventListener("change",e=>{if(e.target.files[0])readFile(e.target.files[0]);});
+
+function readFile(f){
+  setErr("");
+  const r=new FileReader();
+  r.onload=()=>{ try{ ingest(f.name,r.result); }catch(err){ setErr((err.message||err)); } };
+  r.onerror=()=>setErr("Could not read the file.");
+  r.readAsArrayBuffer(f);
+}
+
+function ingest(fname,buf){
+  if(typeof XLSX==="undefined") throw new Error("The spreadsheet reader did not load. Check your connection and reload.");
+  const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
+  // pick the sheet that holds the error rows
+  let rowsAoa=null;
+  for(const nm of wb.SheetNames){
+    const aoa=XLSX.utils.sheet_to_json(wb.Sheets[nm],{header:1,blankrows:false,defval:""});
+    if(aoa.some(row=>row.some(c=>String(c).trim()==="Partner Product Id"))){ rowsAoa=aoa; break; }
   }
-  if(field.length||row.length)eol();
-  const headers=(rows.shift()||[]).map(h=>h.trim());
-  const objs=rows.filter(r=>r.some(c=>String(c).trim()!=="")).map(r=>{
-    const o={};headers.forEach((h,idx)=>o[h]=(r[idx]!==undefined?String(r[idx]).trim():""));return o;
-  });
-  return {headers,rows:objs};
-}
-
-function parseXLSX(buf){
-  if(typeof XLSX==="undefined")throw new Error("XLSX library did not load. Use CSV or XML, or check your network.");
-  const wb=XLSX.read(buf,{type:"array"});
-  const ws=wb.Sheets[wb.SheetNames[0]];
-  const arr=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
-  const headers=(arr.shift()||[]).map(h=>String(h).trim());
-  const objs=arr.filter(r=>r.some(c=>String(c).trim()!=="")).map(r=>{
-    const o={};headers.forEach((h,idx)=>o[h]=(r[idx]!==undefined?String(r[idx]).trim():""));return o;
-  });
-  return {headers,rows:objs};
-}
-
-// attribute names that mark a name/value pair list (e.g. <a name="Waga">2.5</a>)
-const NAME_ATTRS=["name","nazwa","key","klucz","id","code","kod","attribute","atrybut","param","typ","type"];
-const VALUE_ATTRS=["value","wartosc","wartość","val","v"];
-
-function flattenRecord(node,o,prefix){
-  prefix=prefix||"";
-  // first non-empty value wins, so a column always exists but is not overwritten by a later blank
-  const put=(k,v)=>{v=String(v==null?"":v).trim();if(o[k]===undefined)o[k]=v;else if(o[k]===""&&v!=="")o[k]=v;};
-  for(const a of (node.attributes||[])) put(prefix+"@"+a.name,a.value);
-  const byTag={};
-  for(const ch of node.children){(byTag[ch.tagName]=byTag[ch.tagName]||[]).push(ch);}
-  for(const tag in byTag){
-    const group=byTag[tag];
-    // name/value pivot: repeated siblings each carrying a name-ish attribute -> own columns
-    const pivotable = group.length>1 && group.every(ch=>[...ch.attributes].some(a=>NAME_ATTRS.includes(a.name.toLowerCase())));
-    if(pivotable){
-      group.forEach(ch=>{
-        const nameAttr=[...ch.attributes].find(a=>NAME_ATTRS.includes(a.name.toLowerCase()));
-        const valAttr=[...ch.attributes].find(a=>VALUE_ATTRS.includes(a.name.toLowerCase()));
-        put((prefix?prefix+"/":"")+String(nameAttr.value).trim(), valAttr?valAttr.value:ch.textContent);
-      });
-      continue;
-    }
-    // Repeated (and single) non-pivot children collapse onto ONE base key, no #index.
-    // This is what keeps multi-variant fields like every size's EAN as a single
-    // representative column (first non-empty) instead of exploding into stock/item#1..#N.
-    const base=(prefix?prefix+"/":"")+tag;
-    // ...but also keep the full per-variant list when this is a repeated leaf group
-    // carrying attributes (e.g. <stock><item ean= uid= .../></stock>), so EAN can be
-    // checked at the variant level later without re-parsing.
-    const leafRepeated = group.length>1 && group.every(ch=>ch.children.length===0) && group.some(ch=>ch.attributes.length>0);
-    if(leafRepeated){
-      (o.__groups||(o.__groups={}))[base]=group.map(ch=>{
-        const v={_text:ch.textContent.trim()};
-        for(const a of ch.attributes)v[a.name]=String(a.value).trim();
-        return v;
-      });
-    }
-    group.forEach(ch=>{
-      if(ch.children.length){ flattenRecord(ch,o,base); }
-      else{ for(const a of ch.attributes) put(base+"@"+a.name,a.value); put(base,ch.textContent); }
+  if(!rowsAoa){ // fallback to the largest sheet
+    let best=null,n=-1; for(const nm of wb.SheetNames){const a=XLSX.utils.sheet_to_json(wb.Sheets[nm],{header:1,blankrows:false,defval:""});if(a.length>n){n=a.length;best=a;}} rowsAoa=best;
+  }
+  // find header row
+  let hi=rowsAoa.findIndex(row=>row.some(c=>String(c).trim()==="Partner Product Id"));
+  if(hi<0) hi=0;
+  const H=rowsAoa[hi].map(c=>String(c).trim());
+  const ix=n=>H.indexOf(n);
+  const I={pid:ix("Partner Product Id"),gtin:ix("GTIN"),brand:ix("Brand Name"),cat:ix("Category"),title:ix("Error Title"),field:ix("Partner Feed Field"),easy:ix("Products With One Error")};
+  if(I.pid<0||I.field<0) throw new Error("This does not look like an assortment error file, the Partner Product Id or Partner Feed Field column is missing.");
+  ERR=[];
+  for(let i=hi+1;i<rowsAoa.length;i++){
+    const r=rowsAoa[i]; if(!r||!String(r[I.pid]||"").trim()) continue;
+    ERR.push({
+      pid:String(r[I.pid]||"").trim(),
+      gtin:I.gtin>=0?String(r[I.gtin]||"").trim():"",
+      brand:I.brand>=0?String(r[I.brand]||"").trim():"",
+      category:I.cat>=0?String(r[I.cat]||"").trim():"",
+      title:I.title>=0?String(r[I.title]||"").trim():"",
+      field:I.field>=0?String(r[I.field]||"").trim():"",
+      easy:I.easy>=0?/easy/i.test(String(r[I.easy]||"")):false
     });
   }
+  if(!ERR.length) throw new Error("No error rows found in the file.");
+  buildGroups();
+  loadMapsAuto().then(()=>{ renderAll(); $("#s2").classList.remove("hidden"); $("#s1sub").textContent=ERR.length.toLocaleString()+" errors loaded"; $("#s2").scrollIntoView({behavior:"smooth",block:"start"}); });
 }
 
-function parseXML(text){
-  const doc=new DOMParser().parseFromString(text,"application/xml");
-  const perr=doc.getElementsByTagName("parsererror");
-  if(perr&&perr.length)throw new Error("This file is not valid XML.");
-  // count element repetitions
-  const counts={};
-  for(const el of doc.getElementsByTagName("*")) counts[el.tagName]=(counts[el.tagName]||0)+1;
-  // candidates: every element type except the document root (which contains everything)
-  const rootTag=doc.documentElement?doc.documentElement.tagName:null;
-  const candidates=Object.keys(counts).filter(t=>t!==rootTag);
-  if(!candidates.length)throw new Error("Could not find product records in this XML.");
-  // pick the record node: most fields, weighted by how often it repeats; on a tie the
-  // deeper element wins, so a single <product> beats its repeating <item> children and
-  // beats an outer <offers> wrapper. This keeps small (single-product) files working too.
-  const ancestors=el=>{let n=0,p=el.parentElement;while(p){n++;p=p.parentElement;}return n;};
-  let best=null,bestScore=-1,bestDepth=-1;
-  for(const tag of candidates){
-    const sample=doc.getElementsByTagName(tag)[0];
-    const f={};flattenRecord(sample,f);
-    const nf=Object.keys(f).length;
-    if(nf<2)continue;
-    const score=nf*Math.log10(counts[tag]+1);
-    const dep=ancestors(sample);
-    if(score>bestScore+1e-9||(Math.abs(score-bestScore)<1e-9&&dep>bestDepth)){bestScore=score;best=tag;bestDepth=dep;}
-  }
-  if(!best){let n=0;for(const t of candidates){if(counts[t]>n){n=counts[t];best=t;}}}
-  const nodes=[...doc.getElementsByTagName(best)];
-  const headerSet=new Set();
-  const records=nodes.map(node=>{const o={};flattenRecord(node,o);Object.keys(o).forEach(k=>{if(!k.startsWith("__"))headerSet.add(k);});return o;});
-  return {headers:[...headerSet],rows:records};
+/* ---------- grouping ---------- */
+function buildGroups(){
+  const cat={};
+  ERR.forEach(e=>{ if(e.field===FIELD.CAT){ const k=e.category||"(empty)"; (cat[k]=cat[k]||{value:e.category,count:0,sample:""})[0]; cat[k].count++; if(!cat[k].sample)cat[k].sample=e.brand; } });
+  catGroups=Object.values(cat).sort((a,b)=>b.count-a.count);
+  const br={};
+  ERR.forEach(e=>{ const k=e.brand; if(k===undefined)return; (br[k]=br[k]||{value:e.brand,count:0,pids:new Set()}); br[k].count++; });
+  brGroups=Object.values(br).sort((a,b)=>b.count-a.count);
 }
+const PLACEHOLDER_CAT=v=>{const s=(v||"").toLowerCase();return v===""||s.includes("to be categor")||s.includes("tymczasow")||s==="*kategoria tymczasowa";};
+const VAGUE_CAT=v=>{const s=(v||"").toLowerCase();return ["clothing","footwear","accessories","sport/clothing","sport/footwear","sport/accessories","fashion/clothing","fashion/footwear","fashion/accessories"].includes(s);};
+const BRAND_PLACEHOLDER=v=>{const s=(v||"").trim().toLowerCase();return v===""||["inny","other","brak","none","n/a","-"].includes(s);};
+const BRAND_MESSY=v=>v!==v.trim()||/\s{2,}/.test(v)||/\s-\s|-\s|\s-/.test(v);
 
-/* ---------- auto mapping ----------
-   Conservative on purpose. A wrong confident mapping silently corrupts the clean
-   file (e.g. a price written into the length column), which is worse than no
-   mapping at all. So: match only on whole-word tokens, never arbitrary substrings;
-   require a strong match; and when two columns tie, leave it unmapped for a human
-   to pick rather than guess. Under-mapping costs two clicks; mis-mapping costs margin. */
-function wordTokens(s){return String(s).toLowerCase().split(/[^a-z0-9ąćęłńóśźż]+/i).filter(Boolean);}
-function leafSeg(h){const p=h.split(/[\/@#]/).filter(s=>s&&!/^\d+$/.test(s));return p.length?p[p.length-1]:h;}
-function depth(h){return h.split(/[\/@#]/).filter(Boolean).length;}
-
-function autoMap(headers){
-  const m={};const used=new Set();MAPINFO={};
-  // precompute per-header tokens + normalized leaf
-  const H=headers.map(raw=>{const leaf=leafSeg(raw);return {raw,leafN:norm(leaf),toks:new Set(wordTokens(leaf)),d:depth(raw),len:raw.length};});
-  // precompute per-field synonym tokens + normalized forms.
-  // Generic words that show up across many fields must not, on their own, drive a
-  // match (e.g. "name" out of brand_name was grabbing attr@name; "info" out of
-  // manufacturer_info was grabbing safety_info). Whole-phrase exact matches are
-  // unaffected, so a column literally named "brand_name" still resolves correctly.
-  const GENERIC=new Set(["name","info","address","adres","data","dane","value","val","type","contact","code","number","item","product","attr","attribute","field","label","title","desc","description","required","std","default","main","general","other","extra","unit"]);
-  const syns=FIELDS.map(f=>({key:f.key,norms:f.syn.map(norm),toks:new Set([].concat(...f.syn.map(wordTokens)).filter(t=>!GENERIC.has(t)))}));
-
-  for(const fs of syns){
-    let top=-1;const cands=[];
-    for(const h of H){
-      if(used.has(h.raw))continue;
-      let s=0;
-      if(fs.norms.includes(h.leafN))s=3;                                   // whole leaf equals a synonym
-      else if([...h.toks].some(t=>fs.toks.has(t)))s=2;                      // a whole word matches
-      // Dimensions are too easy to mis-match on a single word (e.g. "Długość rękawa"
-      // = sleeve length, not parcel length). Only an exact leaf name maps a dimension.
-      if(s===2&&DIM_KEYS.includes(fs.key))s=0;
-      if(s>top){top=s;cands.length=0;cands.push(h);}
-      else if(s===top&&s>0)cands.push(h);
-    }
-    if(top<2){m[fs.key]="";MAPINFO[fs.key]="";continue;}
-    if(top>=3){
-      // multiple exact-synonym hits = same meaning across duplicate columns -> shallowest, then first
-      cands.sort((a,b)=>a.d-b.d||a.raw.localeCompare(b.raw));
-      m[fs.key]=cands[0].raw;used.add(cands[0].raw);MAPINFO[fs.key]="exact";continue;
-    }
-    // top===2: weaker word-level hits. Guard against ties that may mean different things.
-    const minD=Math.min(...cands.map(c=>c.d));
-    const atMin=cands.filter(c=>c.d===minD);
-    const sig=h=>[...new Set(wordTokens(h.raw).filter(t=>!/^\d+$/.test(t)))].sort().join("|");
-    const sigs=new Set(atMin.map(sig));
-    if(sigs.size>1){m[fs.key]="";MAPINFO[fs.key]="ambiguous";}              // e.g. retail vs wholesale -> human picks
-    else{atMin.sort((a,b)=>a.raw.localeCompare(b.raw));m[fs.key]=atMin[0].raw;used.add(atMin[0].raw);MAPINFO[fs.key]="token";}
-  }
-  return m;
+/* ---------- render ---------- */
+function catCovStats(){
+  let total=0,cleared=0;
+  catGroups.forEach(g=>{ total+=g.count; if((CATMAP[g.value||""]||"").trim()) cleared+=g.count; });
+  return {total,cleared};
 }
-
-/* ---------- numeric parse ---------- */
-function num(v){
-  if(v===undefined||v===null)return null;
-  let s=String(v).trim();if(s==="")return null;
-  s=s.replace(/[\s\u00a0']/g,"");       // strip spaces, non-breaking spaces, apostrophe thousands
-  s=s.replace(/[^0-9,.\-]/g,"");
-  if(s===""||s==="-")return null;
-  const lc=s.lastIndexOf(","),ld=s.lastIndexOf(".");
-  if(lc>-1&&ld>-1){                      // both present: the rightmost is the decimal mark
-    if(lc>ld)s=s.replace(/\./g,"").replace(",",".");
-    else s=s.replace(/,/g,"");
-  }else if(lc>-1){                       // only comma: treat as decimal
-    s=s.replace(",",".");
-  }
-  const n=parseFloat(s);return isNaN(n)?null:n;
+function brCovStats(){
+  let cleared=0;
+  brGroups.forEach(g=>{ if((BRANDMAP[g.value]||"").trim()) cleared+=g.count; });
+  return {cleared};
 }
-function eanValid(v){
-  const s=String(v||"").replace(/\D/g,"");
-  if(![8,12,13,14].includes(s.length))return false;
-  // GS1 check digit: from the rightmost data digit, weights alternate 3,1,3,1...
-  const d=s.split("").map(Number);
-  const check=d.pop();
-  let sum=0,w=3;
-  for(let i=d.length-1;i>=0;i--){sum+=d[i]*w;w=(w===3?1:3);}
-  return ((10-(sum%10))%10)===check;
+function renderTiles(){
+  const byField={}, byTitle={};
+  let easy=0;
+  ERR.forEach(e=>{ byField[e.field]=(byField[e.field]||0)+1; byTitle[e.title]=(byTitle[e.title]||0)+1; if(e.easy)easy++; });
+  const t=(k,v,s)=>`<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v.toLocaleString()}${s?` <small>${esc(s)}</small>`:""}</div></div>`;
+  $("#tiles").innerHTML=
+    t("Total errors",ERR.length)+
+    t("Easy fix",easy,"single-error products")+
+    t("Category path",byField[FIELD.CAT]||0,catGroups.length+" values")+
+    t("Spec value",byField[FIELD.SPEC]||0,"task list")+
+    t("German title",byField[FIELD.TITLE]||0,"task list")+
+    t("Image",byField[FIELD.IMG]||0,"task list");
 }
-function estimateWeight(name,cat){
-  const hay=((name||"")+" "+(cat||"")).toLowerCase();
-  for(const h of WEIGHT_HINTS){ if(h.re.test(hay))return h; }
-  return null;
-}
-
-/* ---------- validation engine ---------- */
-async function inspect(onProgress){
-  const get=(row,key)=>{const src=MAP[key];return src?row[src]:undefined;};
-  const unmapped=k=>MAP[k]==="";
-  const dimsUnmapped=DIM_KEYS.every(unmapped);
-  const clean=[];const exc=[];const notices=[];
-  let blockRows=0,confirmRows=0,okRows=0;
-  let weightMissing=0,brandMissing=0,brandSuggested=0;        // the two hero fields
-  let variantsTotal=0,eanValidCount=0,eanEmptyCount=0,eanJunkCount=0;  // variant-level EAN
-  const variantGaps=[];const allVariants=[];const VARCAP=500000;
-  const eanSeen=new Map();const dupKeys=new Set();const dupRefs=[];const DUPCAP=200000;const idName=new Map();
-  const mpnSeen=new Map();const mpnDupKeys=new Set();const mpnRefs=[];   // producer-code collisions (the Action / merge-key problem)
-  // where the per-variant EAN lives, derived from the mapped EAN column
-  let varBase=null,varAttr=null;
-  if(MAP.ean&&MAP.ean.indexOf("@")>-1){const p=MAP.ean.split("@");varBase=p[0];varAttr=p[1];}
-
-  // Feed-level notices for fields that simply are not in the file. One line each,
-  // instead of repeating the same flag on every one of 25k rows.
-  FIELDS.forEach(f=>{
-    if(DIM_KEYS.includes(f.key)||GPSR_KEYS.includes(f.key))return;
-    if(unmapped(f.key))notices.push({tier:f.req?"block":"soft",field:f.key,msg:f.label+" not mapped to any column, affects all "+DATA.rows.length+" rows"});
-  });
-  if(dimsUnmapped)notices.push({tier:"soft",field:"dimensions",msg:"No dimension columns yet (optional for now, can be added later)"});
-  GPSR_KEYS.forEach(k=>{if(unmapped(k))notices.push({tier:"soft",field:k,msg:k.replace("gpsr_","GPSR ")+" not present in this feed"});});
-
-  // Brand dictionary, learned from the brand values already present in this feed.
-  // Used only to SUGGEST a brand where it is missing but the product name contains a
-  // known brand. Never written silently; always surfaced as a confirm-tier suggestion.
-  let brandRe=null;
-  if(!unmapped("brand")){
-    const seen=new Set();
-    DATA.rows.forEach(r=>{const b=String(r[MAP.brand]||"").trim();if(b.length>=2&&!/^\d+$/.test(b))seen.add(b);});
-    const list=[...seen].sort((a,b)=>b.length-a.length).slice(0,3000);
-    if(list.length){
-      const reEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
-      try{brandRe=new RegExp("\\b("+list.map(reEsc).join("|")+")\\b","i");}catch(e){brandRe=null;}
-    }
-  }
-
-  // EAN-elsewhere detector: if the mapped EAN is empty, look for a barcode hiding in another column
-  const eanLike=v=>eanValid(v);
-  const eanElsewhere={};
-
-  const N=DATA.rows.length;
-  for(let idx=0;idx<N;idx++){
-    const row=DATA.rows[idx];
-    if(idx%2000===0&&idx>0){ if(onProgress)onProgress(idx,N); await new Promise(r=>setTimeout(r)); }
-    const rowId=get(row,"sku")||get(row,"ean")||("row "+(idx+1));
-    const out={};FIELDS.forEach(f=>out[f.key]=get(row,f.key)!==undefined?get(row,f.key):"");
-    if(!idName.has(rowId))idName.set(rowId,String(out.name||""));
-    let rowBlock=false,rowConfirm=false;
-    const add=(field,tier,found,sugg)=>{exc.push({rowId,field,tier,found,sugg:sugg||""});};
-
-    if(!unmapped("sku")&&!String(out.sku).trim()){add("sku","block","missing");rowBlock=true;}
-    if(!unmapped("name")&&!String(out.name).trim()){add("name","block","missing");rowBlock=true;}
-
-    // Producer code / MPN collisions. The catalogue merges products that share a
-    // producer code, but a supplier like Action reuses the same code for different
-    // products, so different items with different prices end up merged. We flag when
-    // the same code sits on more than one product.
-    if(!unmapped("mpn")){
-      const code=String(out.mpn).trim();
-      if(code){
-        const ref={id:rowId,name:String(out.name||""),price:num(out.price)};
-        const prev=mpnSeen.get(code);
-        if(prev===undefined)mpnSeen.set(code,ref);
-        else{
-          if(!mpnDupKeys.has(code)){mpnDupKeys.add(code);if(mpnRefs.length<DUPCAP)mpnRefs.push({code,...prev});}
-          if(mpnRefs.length<DUPCAP)mpnRefs.push({code,...ref});
-        }
-      }
-    }
-
-    // EAN at the VARIANT level. A product is one row, but each size variant has its
-    // own barcode. We classify every variant: valid / empty / junk (something there
-    // but not a real EAN, like 000043). The product is only flagged when not a single
-    // variant carries a valid code.
-    if(!unmapped("ean")){
-      let variants=null;
-      if(varBase&&row.__groups&&row.__groups[varBase])variants=row.__groups[varBase];
-      else if(varBase){ // single-variant product: treat the collapsed values as one variant
-        const e=row[varBase+"@"+varAttr];
-        if(e!==undefined)variants=[{[varAttr]:e,uid:row[varBase+"@uid"]||"",_text:row[varBase]||""}];
-      }
-      let pValid=0,pAny=0;
-      if(variants){
-        variants.forEach(v=>{
-          pAny++;variantsTotal++;
-          const e=String(v[varAttr]||"").trim();
-          const dig=e.replace(/\D/g,"");
-          let state=e===""?"empty":(eanValid(e)?"valid":"junk");
-          const uid=v.uid||v.option||"";const size=v._text||"";
-          if(allVariants.length<VARCAP)allVariants.push({id:rowId,uid,size,ean:e,state});
-          if(state==="valid"){
-            eanValidCount++;pValid++;
-            // duplicate tracking: same valid barcode appearing on more than one variant
-            const prev=eanSeen.get(dig);
-            if(prev===undefined){eanSeen.set(dig,{id:rowId,uid,size});}
-            else{
-              if(!dupKeys.has(dig)){dupKeys.add(dig);if(dupRefs.length<DUPCAP)dupRefs.push({ean:dig,id:prev.id,uid:prev.uid,size:prev.size});}
-              if(dupRefs.length<DUPCAP)dupRefs.push({ean:dig,id:rowId,uid,size});
-            }
-          }
-          else{
-            if(state==="empty")eanEmptyCount++;else eanJunkCount++;
-            if(variantGaps.length<200000)variantGaps.push({id:rowId,name:String(out.name||""),uid,size,ean:e,state});
-          }
-        });
-      }
-      if(pAny===0){
-        // EAN column is mapped but this product has no variant data at all
-        const ean=String(out.ean).trim();
-        if(!ean){add("ean","block","missing");rowBlock=true;for(const h of DATA.headers){if(h!==MAP.ean&&eanLike(row[h])){eanElsewhere[h]=(eanElsewhere[h]||0)+1;break;}}}
-        else if(!eanValid(ean)){add("ean","block","invalid: "+ean);rowBlock=true;}
-      }else if(pValid===0){
-        add("ean","block","no valid EAN on any of "+pAny+" variants");rowBlock=true;
-      }
-    }
-
-    if(!unmapped("price")){
-      const price=num(out.price);
-      if(price===null){add("price","block","missing or non-numeric");rowBlock=true;}
-      else if(price<=0){add("price","block","not positive: "+price);rowBlock=true;}
-    }
-
-    // WEIGHT, hero field #1. Missing weight is the headline gap to chase per supplier.
-    let w=null;
-    if(!unmapped("weight_kg")){
-      w=num(out.weight_kg);
-      if(w===null||w<=0){
-        weightMissing++;
-        const est=estimateWeight(out.name,out.category);
-        if(est){add("weight_kg","confirm","missing",est.range[0]+"-"+est.range[1]+" kg (estimate, confirm with supplier)");rowConfirm=true;}
-        else{add("weight_kg","block","missing");rowBlock=true;}
-        w=null;
-      }
-    }
-
-    // BRAND, hero field #2. Catalog completeness. Suggest from name only, never invent.
-    if(!unmapped("brand")){
-      const b=String(out.brand||"").trim();
-      if(!b){
-        brandMissing++;
-        let sugg="";
-        if(brandRe){const mm=String(out.name||"").match(brandRe);if(mm)sugg="from name: "+mm[1];}
-        if(sugg){add("brand","confirm","missing",sugg);rowConfirm=true;brandSuggested++;}
-        else{add("brand","block","missing");rowBlock=true;}
-      }
-    }
-
-    // Dimensions, optional for now. Only checked when the columns actually exist; no
-    // per-row noise while the feed carries no dimension data.
-    if(!dimsUnmapped){
-      const dims=DIM_KEYS.map(k=>unmapped(k)?null:num(out[k]));
-      const missing=DIM_KEYS.filter((k,i)=>!unmapped(k)&&(dims[i]===null||dims[i]<=0));
-      if(missing.length){
-        const heavy=(w!==null&&w>=OVERSIZE_KG);
-        if(heavy){add("dimensions","confirm","missing: "+missing.map(k=>k.replace("_cm","")).join(", "),"heavy "+w+" kg, dimensions help carrier pricing");rowConfirm=true;}
-        else{add("dimensions","soft","missing: "+missing.map(k=>k.replace("_cm","")).join(", "));}
-      }else{
-        const present=dims.filter(d=>d!==null);const maxDim=present.length?Math.max(...present):0;
-        if(maxDim>120){add("dimensions","soft","oversize: "+maxDim+" cm","check carrier surcharge");}
-      }
-    }
-
-    // GPSR: per-row flag only when the column exists but is empty (a real gap)
-    GPSR_KEYS.forEach(k=>{ if(!unmapped(k)&&!String(out[k]).trim())add(k,"soft","present in feed but empty"); });
-
-    if(rowBlock)blockRows++;else if(rowConfirm)confirmRows++;else okRows++;
-    clean.push({out,rowBlock,rowConfirm});
-  }
-
-  // surface the best alternative EAN column, if one consistently holds a barcode
-  const eanCols=Object.entries(eanElsewhere).sort((a,b)=>b[1]-a[1]);
-  if(eanCols.length&&eanCols[0][1]>=Math.max(10,Math.floor(DATA.rows.length*0.02))){
-    notices.push({tier:"confirm",field:"ean",msg:eanCols[0][1]+" rows with no EAN in the mapped column have a valid barcode in “"+eanCols[0][0]+"”, consider remapping EAN to it"});
-  }
-
-  // duplicate EANs: group the collected refs by barcode, classify each group as
-  // cross-product (same code on different products, hard error) or within-product
-  // (same code on different sizes of one product, also an error). Both are block tier.
-  const dupGroups={};
-  dupRefs.forEach(r=>{(dupGroups[r.ean]||(dupGroups[r.ean]=[])).push(r);});
-  const dupRecords=[];let dupCross=0,dupIntra=0;
-  Object.keys(dupGroups).forEach(ean=>{
-    const refs=dupGroups[ean];
-    const ids=new Set(refs.map(r=>r.id));
-    const kind=ids.size>1?"across products":"within product";
-    if(ids.size>1)dupCross++;else dupIntra++;
-    refs.forEach(r=>{if(dupRecords.length<DUPCAP)dupRecords.push({ean,kind,id:r.id,name:idName.get(r.id)||"",uid:r.uid,size:r.size});});
-  });
-  const dupEanTotal=dupCross+dupIntra;
-  if(dupEanTotal>0)notices.push({tier:"block",field:"ean",msg:dupEanTotal.toLocaleString()+" duplicate EANs found ("+dupCross.toLocaleString()+" across different products, "+dupIntra.toLocaleString()+" within a single product), each blocks correct matching on marketplaces"});
-
-  // producer-code collisions: group by code, flag groups where products differ in price
-  const mpnGroups={};
-  mpnRefs.forEach(r=>{(mpnGroups[r.code]||(mpnGroups[r.code]=[])).push(r);});
-  const mergeRecords=[];let mergeCodes=0,mergePriceMismatch=0;
-  Object.keys(mpnGroups).forEach(code=>{
-    const refs=mpnGroups[code];
-    const ids=new Set(refs.map(r=>r.id));
-    if(ids.size<2)return;                       // only real cross-product collisions
-    mergeCodes++;
-    const prices=refs.map(r=>r.price).filter(p=>p!==null&&p!==undefined);
-    const mismatch=prices.length>1&&Math.max(...prices)!==Math.min(...prices);
-    if(mismatch)mergePriceMismatch++;
-    refs.forEach(r=>{if(mergeRecords.length<DUPCAP)mergeRecords.push({code,id:r.id,name:r.name,price:r.price,mismatch});});
-  });
-  if(mergeCodes>0)notices.push({tier:"confirm",field:"mpn",msg:mergeCodes.toLocaleString()+" producer codes are shared across different products ("+mergePriceMismatch.toLocaleString()+" of them with differing prices), which is what merges unrelated items into one card. You decide which to split"});
-
-  REPORT={clean,exc,notices,variantGaps,allVariants,dupRecords,mergeRecords,counts:{
-    total:DATA.rows.length,blockRows,confirmRows,okRows,
-    weightMapped:!unmapped("weight_kg"),weightMissing,
-    brandMapped:!unmapped("brand"),brandMissing,brandSuggested,
-    eanVariantMode:variantsTotal>0,variantsTotal,eanValidCount,eanEmptyCount,eanJunkCount,
-    dupEanTotal,dupCross,dupIntra,mergeCodes,mergePriceMismatch
-  }};
-}
-
-/* ---------- rendering ---------- */
-function renderMap(){
-  const tb=$("#mapT tbody");tb.innerHTML="";
-  const opts=h=>`<option value="">(not in file)</option>`+DATA.headers.map(x=>`<option value="${esc(x)}"${MAP[h.key]===x?" selected":""}>${esc(x)}</option>`).join("");
-  FIELDS.forEach(f=>{
+function renderCat(){
+  const tb=$("#catT tbody");tb.innerHTML="";
+  const fr=document.createDocumentFragment();
+  catGroups.forEach((g,i)=>{
+    const key=g.value||"";
     const tr=document.createElement("tr");
-    const hit=MAP[f.key]!=="";
-    const info=MAPINFO[f.key];
-    const label=hit?(info==="exact"?"exact match → ":(info==="token"?"word match → ":"matched → "))+esc(MAP[f.key]):(info==="ambiguous"?"ambiguous, pick manually":"no match");
-    tr.innerHTML=`<td><code>${f.key}</code>${f.req?'<span class="req">*</span>':''}<br><span class="auto">${esc(f.label)}</span></td>
-      <td><select data-k="${f.key}" aria-label="Source column for ${esc(f.label)}">${opts(f)}</select></td>
-      <td><span class="auto ${hit?'hit':''}">${label}</span></td>`;
-    tb.appendChild(tr);
+    const done=(CATMAP[key]||"").trim()?" done":"";
+    const ph=PLACEHOLDER_CAT(g.value), vg=VAGUE_CAT(g.value);
+    tr.className=(ph||vg?"flag":"")+done;
+    const tag=ph?`<span class="pill placeholder">placeholder</span> `:(vg?`<span class="pill messy">too vague</span> `:"");
+    tr.innerHTML=`<td class="orig">${tag}${esc(g.value||"(empty)")}</td><td class="cnt">${g.count.toLocaleString()}</td><td><input data-k="${esc(key)}" value="${esc(CATMAP[key]||"")}" placeholder="e.g. Sport / Football / Boots"></td>`;
+    fr.appendChild(tr);
   });
-  tb.querySelectorAll("select").forEach(sel=>sel.addEventListener("change",e=>{
-    MAP[e.target.dataset.k]=e.target.value;
-    const cell=e.target.closest("tr").querySelector(".auto.hit,.auto");
-    cell.textContent=e.target.value?("set → "+e.target.value):"no match";
-    cell.classList.toggle("hit",!!e.target.value);
-    inspectForced=false;$("#runBtn").textContent="Inspect feed";$("#runWarn").hidden=true;  // re-gate after edits
+  tb.appendChild(fr);
+  tb.querySelectorAll("input").forEach(inp=>inp.addEventListener("input",e=>{
+    const k=e.target.getAttribute("data-k"); const v=e.target.value;
+    if(v.trim())CATMAP[k]=v; else delete CATMAP[k];
+    e.target.closest("tr").classList.toggle("done",!!v.trim());
+    updateCatMeter(); saveMapsAuto();
   }));
+  updateCatMeter();
 }
-function renderReport(){
-  const c=REPORT.counts;
-  const pct=(miss)=>c.total?Math.round((c.total-miss)/c.total*100):0;
-  const heroCard=(label,mapped,miss,extra)=>{
-    if(!mapped)return `<div class="hero na"><div class="hl">${label}</div><div class="hv">not mapped</div><div class="hs">no column selected for this field</div></div>`;
-    const p=pct(miss);const cls=p>=98?"good":p>=85?"warn":"bad";
-    return `<div class="hero ${cls}"><div class="hl">${label} completeness</div><div class="hv">${p}<span>%</span></div><div class="hs">${miss.toLocaleString()} of ${c.total.toLocaleString()} missing${extra||""}</div></div>`;
-  };
-  const eanHero=(c)=>{
-    const t=c.variantsTotal||0;const p=t?Math.round(c.eanValidCount/t*100):0;
-    const cls=p>=98?"good":p>=85?"warn":"bad";
-    const gaps=(c.eanEmptyCount+c.eanJunkCount);
-    return `<div class="hero ${cls}"><div class="hl">EAN completeness · per variant</div><div class="hv">${p}<span>%</span></div><div class="hs">${gaps.toLocaleString()} of ${t.toLocaleString()} variants need a code (${c.eanEmptyCount.toLocaleString()} empty · ${c.eanJunkCount.toLocaleString()} junk)</div></div>`;
-  };
-  $("#heroes").innerHTML=
-    heroCard("Weight",c.weightMapped,c.weightMissing,"")+
-    heroCard("Brand",c.brandMapped,c.brandMissing,c.brandSuggested?(" · "+c.brandSuggested.toLocaleString()+" suggestible from name"):"")+
-    (c.eanVariantMode?eanHero(c):heroCard("EAN",false,0,""));
-  $("#summary").innerHTML=`
-    <div class="chip"><b>${c.total.toLocaleString()}</b>rows read</div>
-    <div class="chip block"><b>${c.blockRows.toLocaleString()}</b>blocked · critical gap</div>
-    <div class="chip confirm"><b>${c.confirmRows.toLocaleString()}</b>need confirm</div>
-    <div class="chip ok"><b>${c.okRows.toLocaleString()}</b>clean</div>
-    <div class="chip"><b>${REPORT.exc.length.toLocaleString()}</b>row flags</div>`;
-  // feed-level notices first, these are the headline findings about the whole feed
-  const nb=$("#notices");
-  if(REPORT.notices&&REPORT.notices.length){
-    nb.hidden=false;
-    nb.innerHTML=`<div class="notices-h">Feed-level findings</div>`+REPORT.notices.map(n=>
-      `<div class="notice ${n.tier}"><span class="pill ${n.tier}">${n.tier}</span><span>${esc(n.msg)}</span></div>`).join("");
-  }else{nb.hidden=true;nb.innerHTML="";}
-  const tb=$("#ledgerT tbody");tb.innerHTML="";
-  if(!REPORT.exc.length){tb.innerHTML=`<tr><td colspan="5" class="empty">No row-level gaps in the mapped fields.</td></tr>`;}
-  else{
-    const order={block:0,confirm:1,soft:2};
-    const CAP=500;
-    const sorted=REPORT.exc.slice().sort((a,b)=>order[a.tier]-order[b.tier]);
-    const frag=document.createDocumentFragment();
-    sorted.slice(0,CAP).forEach(x=>{
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td class="id">${esc(x.rowId)}</td>
-        <td class="field">${esc(x.field)}</td>
-        <td><span class="pill ${x.tier}">${x.tier}</span></td>
-        <td>${esc(x.found)}</td>
-        <td class="sugg">${esc(x.sugg)}</td>`;
-      frag.appendChild(tr);
-    });
-    tb.appendChild(frag);
-    if(sorted.length>CAP){
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td colspan="5" class="empty">Showing first ${CAP} of ${sorted.length} row flags. Download the exceptions report for the full list.</td>`;
-      tb.appendChild(tr);
+function renderBr(){
+  const tb=$("#brT tbody");tb.innerHTML="";
+  const fr=document.createDocumentFragment();
+  brGroups.forEach(g=>{
+    const ph=BRAND_PLACEHOLDER(g.value), messy=BRAND_MESSY(g.value);
+    const tr=document.createElement("tr");
+    const done=(BRANDMAP[g.value]||"").trim()?" done":"";
+    tr.className=(ph||messy?"flag":"")+done;
+    const tag=ph?`<span class="pill placeholder">placeholder</span> `:(messy?`<span class="pill messy">check</span> `:"");
+    tr.innerHTML=`<td class="orig">${tag}${esc(g.value||"(empty)")}</td><td class="cnt">${g.count.toLocaleString()}</td><td><input data-k="${esc(g.value)}" value="${esc(BRANDMAP[g.value]||"")}" placeholder="${ph||messy?"correct brand":""}"></td>`;
+    fr.appendChild(tr);
+  });
+  tb.appendChild(fr);
+  tb.querySelectorAll("input").forEach(inp=>inp.addEventListener("input",e=>{
+    const k=e.target.getAttribute("data-k"); const v=e.target.value;
+    if(v.trim())BRANDMAP[k]=v; else delete BRANDMAP[k];
+    e.target.closest("tr").classList.toggle("done",!!v.trim());
+    updateBrMeter(); saveMapsAuto();
+  }));
+  updateBrMeter();
+}
+function updateCatMeter(){
+  const {total,cleared}=catCovStats();
+  const pct=total?Math.round(cleared/total*100):0;
+  $("#catFill").style.width=pct+"%"; $("#catPct").textContent=pct+"%";
+  $("#catCov").textContent=cleared.toLocaleString()+" of "+total.toLocaleString();
+}
+function updateBrMeter(){
+  const {cleared}=brCovStats();
+  const denom=brGroups.reduce((a,g)=>a+g.count,0)||1;
+  const pct=Math.round(cleared/denom*100);
+  $("#brFill").style.width=pct+"%"; $("#brPct").textContent=cleared.toLocaleString();
+  $("#brCov").textContent=cleared.toLocaleString();
+}
+function renderAll(){ renderTiles(); renderCat(); renderBr(); }
+
+/* ---------- corrections ---------- */
+function buildCorrections(){
+  const seen=new Set(); const out=[];
+  ERR.forEach(e=>{
+    if(e.field===FIELD.CAT){
+      const tgt=(CATMAP[e.category||""]||"").trim();
+      if(tgt){ const key=e.pid+"|cat"; if(!seen.has(key)){seen.add(key);out.push({pid:e.pid,gtin:e.gtin,field:FIELD.CAT,old:e.category,new:tgt});} }
     }
-  }
-  // variant-level EAN gaps
-  const vb=$("#variantBlock");const gaps=REPORT.variantGaps||[];
-  if(c.eanVariantMode&&gaps.length){
-    vb.hidden=false;
-    const vt=$("#variantT tbody");vt.innerHTML="";
-    const order={junk:0,empty:1};const VCAP=500;
-    const sg=gaps.slice().sort((a,b)=>(order[a.state]-order[b.state]));
-    const vf=document.createDocumentFragment();
-    sg.slice(0,VCAP).forEach(x=>{
-      const tier=x.state==="junk"?"block":"confirm";
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td class="id">${esc(x.id)}</td><td>${esc(x.name)}</td><td class="id">${esc(x.uid)}</td><td>${esc(x.size)}</td><td class="field">${esc(x.ean||"(empty)")}</td><td><span class="pill ${tier}">${esc(x.state)}</span></td>`;
-      vf.appendChild(tr);
-    });
-    vt.appendChild(vf);
-    if(sg.length>VCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="6" class="empty">Showing first ${VCAP} of ${sg.length.toLocaleString()} variant gaps. Download the CSV for the full list.</td>`;vt.appendChild(tr);}
-  }else{vb.hidden=true;}
-
-  // duplicate EANs
-  const db=$("#dupBlock");const dups=REPORT.dupRecords||[];
-  if(dups.length){
-    db.hidden=false;
-    const dt=$("#dupT tbody");dt.innerHTML="";
-    const ord={"across products":0,"within product":1};const DCAP=500;
-    const sd=dups.slice().sort((a,b)=>(ord[a.kind]-ord[b.kind])||String(a.ean).localeCompare(String(b.ean)));
-    const dfr=document.createDocumentFragment();
-    sd.slice(0,DCAP).forEach(x=>{
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td class="field">${esc(x.ean)}</td><td><span class="pill block">${esc(x.kind)}</span></td><td class="id">${esc(x.id)}</td><td>${esc(x.name)}</td><td class="id">${esc(x.uid)}</td><td>${esc(x.size)}</td>`;
-      dfr.appendChild(tr);
-    });
-    dt.appendChild(dfr);
-    if(sd.length>DCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="6" class="empty">Showing first ${DCAP} of ${sd.length.toLocaleString()} duplicate locations. Download the CSV for the full list.</td>`;dt.appendChild(tr);}
-  }else{db.hidden=true;}
-
-  // producer-code collisions
-  const mb=$("#mergeBlock");const merges=REPORT.mergeRecords||[];
-  if(merges.length){
-    mb.hidden=false;
-    const mt=$("#mergeT tbody");mt.innerHTML="";
-    const MCAP=500;
-    const sm=merges.slice().sort((a,b)=>(b.mismatch-a.mismatch)||String(a.code).localeCompare(String(b.code)));
-    const mfr=document.createDocumentFragment();
-    sm.slice(0,MCAP).forEach(x=>{
-      const tier=x.mismatch?"block":"confirm";const flag=x.mismatch?"price mismatch":"same price";
-      const price=(x.price===null||x.price===undefined)?"":x.price;
-      const tr=document.createElement("tr");
-      tr.innerHTML=`<td class="field">${esc(x.code)}</td><td class="id">${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(price)}</td><td><span class="pill ${tier}">${flag}</span></td>`;
-      mfr.appendChild(tr);
-    });
-    mt.appendChild(mfr);
-    if(sm.length>MCAP){const tr=document.createElement("tr");tr.innerHTML=`<td colspan="5" class="empty">Showing first ${MCAP} of ${sm.length.toLocaleString()} collision rows. Download the CSV for the full list.</td>`;mt.appendChild(tr);}
-  }else{mb.hidden=true;}
-  $("#s3sub").textContent=c.total+" rows inspected";
+  });
+  // brand corrections apply to any product whose brand is mapped
+  ERR.forEach(e=>{
+    const tgt=(BRANDMAP[e.brand]||"").trim();
+    if(tgt && tgt!==e.brand){ const key=e.pid+"|brand"; if(!seen.has(key)){seen.add(key);out.push({pid:e.pid,gtin:e.gtin,field:"BrandName",old:e.brand,new:tgt});} }
+  });
+  return out;
 }
-function esc(s){return String(s===undefined||s===null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
+function taskList(field){
+  const seen=new Set(); const out=[];
+  ERR.forEach(e=>{ if(e.field===field){ if(!seen.has(e.pid)){seen.add(e.pid);out.push(e);} } });
+  return out;
+}
 
-/* ---------- exports ---------- */
+/* ---------- export step ---------- */
+$("#goExport").addEventListener("click",()=>{
+  const corr=buildCorrections();
+  const lists=[["German title",FIELD.TITLE],["Image",FIELD.IMG],["GTIN",FIELD.GTIN],["Spec value",FIELD.SPEC]];
+  const t=(k,v,s)=>`<div class="tile"><div class="k">${esc(k)}</div><div class="v">${v.toLocaleString()}${s?` <small>${esc(s)}</small>`:""}</div></div>`;
+  $("#exTiles").innerHTML=t("Corrections ready",corr.length,"products to update")+
+    lists.map(([lab,f])=>t(lab,taskList(f).length,"to do by hand")).join("");
+  // task buttons
+  const tb=$("#taskBtns"); tb.innerHTML="";
+  lists.forEach(([lab,f])=>{
+    const b=document.createElement("button"); b.className="ghost"; b.textContent="Download "+lab+" list (.csv)";
+    b.addEventListener("click",()=>{
+      const rows=taskList(f).map(e=>({product_id:e.pid,gtin:e.gtin,brand:e.brand,category:e.category,error:e.title}));
+      if(!rows.length)return;
+      download(lab.toLowerCase().replace(/\s+/g,"-")+"-todo.csv",toCSV(["product_id","gtin","brand","category","error"],rows));
+    });
+    tb.appendChild(b);
+  });
+  $("#s3sub").textContent=corr.length.toLocaleString()+" corrections";
+  $("#s3").classList.remove("hidden");
+  $("#s3").scrollIntoView({behavior:"smooth",block:"start"});
+});
+$("#dlCorr").addEventListener("click",()=>{
+  const corr=buildCorrections();
+  if(!corr.length){return;}
+  download("corrections.csv",toCSV(["product_id","gtin","field","old_value","new_value"],
+    corr.map(c=>({product_id:c.pid,gtin:c.gtin,field:c.field,old_value:c.old,new_value:c.new}))));
+});
+
+/* ---------- mapping persistence ---------- */
+async function saveMapsAuto(){ await store.set(CK,CATMAP); await store.set(BK,BRANDMAP); }
+async function loadMapsAuto(){ CATMAP=(await store.get(CK))||{}; BRANDMAP=(await store.get(BK))||{}; }
+$("#saveMaps").addEventListener("click",async()=>{ await saveMapsAuto(); flash("#saveMaps","Saved"); });
+$("#loadMaps").addEventListener("click",async()=>{ await loadMapsAuto(); renderCat(); renderBr(); flash("#loadMaps","Loaded"); });
+$("#dlMaps").addEventListener("click",()=>{
+  const blob=new Blob([JSON.stringify({categories:CATMAP,brands:BRANDMAP},null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="assortment-mapping.json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+});
+$("#importMaps").addEventListener("click",()=>$("#mapsFile").click());
+$("#mapsFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const j=JSON.parse(r.result);CATMAP=j.categories||{};BRANDMAP=j.brands||{};saveMapsAuto();renderCat();renderBr();}catch(err){alert("Not a valid mapping file.");}};r.readAsText(f);});
+function flash(sel,txt){const b=$(sel);const o=b.textContent;b.textContent=txt;setTimeout(()=>b.textContent=o,1200);}
+
+/* ---------- csv ---------- */
 function toCSV(headers,rows){
-  const q=v=>{v=String(v===undefined||v===null?"":v);return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const q=v=>{v=String(v==null?"":v);return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
   return [headers.map(q).join(";")].concat(rows.map(r=>headers.map(h=>q(r[h])).join(";"))).join("\r\n");
 }
 function download(name,csv){
   const ds=new Date().toISOString().slice(0,10);
   name=name.replace(/\.csv$/i,"-"+ds+".csv");
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
-function exportClean(){
-  const block=$("#optBlock").checked;
-  const heads=FIELDS.map(f=>f.key);
-  const rows=REPORT.clean.filter(r=>!(block&&r.rowBlock)).map(r=>r.out);
-  download("clean-feed.csv",toCSV(heads,rows));
-}
-function exportExc(){
-  const notices=(REPORT.notices||[]).map(n=>({rowId:"(feed-level)",field:n.field,tier:n.tier,found:n.msg,suggested:""}));
-  const rows=notices.concat(REPORT.exc.map(x=>({rowId:x.rowId,field:x.field,tier:x.tier,found:x.found,suggested:x.sugg})));
-  download("exceptions-report.csv",toCSV(["rowId","field","tier","found","suggested"],rows));
-}
-function exportVariantGaps(){
-  const g=REPORT.variantGaps||[];
-  if(!g.length){return;}
-  download("ean-gaps-by-variant.csv",toCSV(["product_id","product_name","variant_uid","size","ean","state"],
-    g.map(x=>({product_id:x.id,product_name:x.name,variant_uid:x.uid,size:x.size,ean:x.ean,state:x.state}))));
-}
-function exportVariantsAll(){
-  const a=REPORT.allVariants||[];
-  if(!a.length){return;}
-  download("all-variants.csv",toCSV(["product_id","variant_uid","size","ean","state"],
-    a.map(x=>({product_id:x.id,variant_uid:x.uid,size:x.size,ean:x.ean,state:x.state}))));
-}
-function exportDup(){
-  const a=REPORT.dupRecords||[];
-  if(!a.length){return;}
-  download("duplicate-eans.csv",toCSV(["ean","type","product_id","product_name","variant_uid","size"],
-    a.map(x=>({ean:x.ean,type:x.kind,product_id:x.id,product_name:x.name,variant_uid:x.uid,size:x.size}))));
-}
-function exportMerge(){
-  const a=REPORT.mergeRecords||[];
-  if(!a.length){return;}
-  download("producer-code-collisions.csv",toCSV(["producer_code","product_id","product_name","price","flag"],
-    a.map(x=>({producer_code:x.code,product_id:x.id,product_name:x.name,price:(x.price==null?"":x.price),flag:x.mismatch?"price mismatch":"same price"}))));
-}
-
-/* ---------- flow ---------- */
-async function ingest(name,content,kind){
-  setErr("");
-  try{
-    if(kind==="xml")DATA=parseXML(content);
-    else if(kind==="xlsx")DATA=parseXLSX(content);
-    else DATA=parseCSV(content);
-    if(!DATA.headers.length||!DATA.rows.length)throw new Error("No rows found in this file.");
-    MAP=autoMap(DATA.headers);
-    $("#s2sub").textContent=DATA.rows.length+" rows · "+DATA.headers.length+" columns";
-    $("#s1sub").textContent=name;
-    renderMap();show("#s2");hide("#s3");
-    $("#s2").scrollIntoView({behavior:"smooth",block:"start"});
-  }catch(err){setErr(err.message||String(err));}
-}
-function readFile(file){
-  const name=file.name.toLowerCase();
-  const kind=name.endsWith(".xml")?"xml":(name.endsWith(".xlsx")||name.endsWith(".xls"))?"xlsx":"csv";
-  const fr=new FileReader();
-  fr.onerror=()=>setErr("Could not read the file.");
-  fr.onload=()=>ingest(file.name,fr.result,kind);
-  if(kind==="xlsx")fr.readAsArrayBuffer(file);else fr.readAsText(file,"utf-8");
-}
-
-/* ---------- wire up ---------- */
-$("#drop").addEventListener("click",()=>$("#file").click());
-$("#drop").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#file").click();}});
-$("#file").addEventListener("change",e=>{if(e.target.files[0])readFile(e.target.files[0]);});
-["dragenter","dragover"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.add("over");}));
-["dragleave","drop"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.remove("over");}));
-$("#drop").addEventListener("drop",e=>{if(e.dataTransfer.files[0])readFile(e.dataTransfer.files[0]);});
-
-$("#fetchBtn").addEventListener("click",async()=>{
-  const u=$("#url").value.trim();if(!u)return;
-  if(!/^https?:\/\//i.test(u)){setErr("Only http and https URLs are allowed.");return;}
-  setErr("");
-  try{
-    const res=await fetch(u);if(!res.ok)throw new Error("Fetch failed: "+res.status);
-    const kind=u.toLowerCase().endsWith(".xml")?"xml":(u.toLowerCase().endsWith(".xlsx")||u.toLowerCase().endsWith(".xls"))?"xlsx":"csv";
-    if(kind==="xlsx")ingest(u,await res.arrayBuffer(),"xlsx");else ingest(u,await res.text(),kind);
-  }catch(err){setErr((err.message||err)+", most direct file URLs block cross-origin fetch. Download the file and drop it above instead.");}
-});
-
-let inspectForced=false;
-$("#runBtn").addEventListener("click",async()=>{
-  const missing=FIELDS.filter(f=>f.req&&MAP[f.key]==="");
-  if(missing.length&&!inspectForced){
-    const labels=missing.map(f=>f.label).join(", ");
-    $("#runWarn").hidden=false;
-    $("#runWarn").textContent="Required fields not mapped: "+labels+". Map them, or press the button again to inspect anyway.";
-    $("#runBtn").textContent="Inspect anyway";
-    inspectForced=true;
-    return;
-  }
-  const btn=$("#runBtn");btn.disabled=true;
-  const prog=$("#progress");prog.hidden=false;prog.textContent="Inspecting… 0%";
-  await new Promise(r=>setTimeout(r));
-  try{
-    await inspect((done,total)=>{prog.textContent="Inspecting… "+Math.round(done/total*100)+"%";});
-    renderReport();
-    show("#s3");
-    $("#s3").scrollIntoView({behavior:"smooth",block:"start"});
-  }catch(err){$("#runWarn").hidden=false;$("#runWarn").textContent="Inspection failed: "+(err.message||err);}
-  finally{prog.hidden=true;btn.disabled=false;btn.textContent="Inspect feed";inspectForced=false;$("#runWarn").hidden=true;}
-});
-
-$("#saveProfile").addEventListener("click",async()=>{
-  const sup=$("#supplier").value.trim();
-  if(!sup){$("#profMsg").textContent="Enter a supplier name first.";return;}
-  await store.set("map:"+norm(sup),MAP);
-  $("#profMsg").textContent="Mapping saved for “"+sup+"”.";
-});
-$("#loadProfile").addEventListener("click",async()=>{
-  const sup=$("#supplier").value.trim();
-  if(!sup){$("#profMsg").textContent="Enter a supplier name first.";return;}
-  const saved=await store.get("map:"+norm(sup));
-  if(!saved){$("#profMsg").textContent="No saved mapping for “"+sup+"”.";return;}
-  // only apply keys whose source column still exists in this file
-  FIELDS.forEach(f=>{ if(saved[f.key]&&DATA.headers.includes(saved[f.key]))MAP[f.key]=saved[f.key]; });
-  renderMap();$("#profMsg").textContent="Loaded saved mapping for “"+sup+"”.";
-});
-
-$("#dlClean").addEventListener("click",exportClean);
-$("#dlExc").addEventListener("click",exportExc);
-$("#dlVarGaps").addEventListener("click",exportVariantGaps);
-$("#dlVarAll").addEventListener("click",exportVariantsAll);
-$("#dlDup").addEventListener("click",exportDup);
-$("#dlMerge").addEventListener("click",exportMerge);
-$("#restart").addEventListener("click",()=>{DATA={headers:[],rows:[]};MAP={};REPORT=null;hide("#s2");hide("#s3");$("#file").value="";$("#s1sub").textContent="XML · CSV · XLSX";window.scrollTo({top:0,behavior:"smooth"});});
 </script>
 </body>
 </html>
